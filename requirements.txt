@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+numpy
+matplotlib
+pyvisa
+pyvisa-py
+requests
+

@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <title>Scope Web DAQ</title>
+    <style>
+      body {
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+        margin: 0;
+        padding: 0;
+        background: #121212;
+        color: #e0e0e0;
+      }
+      header {
+        padding: 6px 10px;
+        background: #1e1e1e;
+        color: #f5f5f5;
+        font-size: 13px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      main {
+        max-width: 1100px;
+        margin: 8px auto;
+        display: flex;
+        gap: 8px;
+        padding: 0 8px;
+        box-sizing: border-box;
+      }
+      .main-left {
+        flex: 2;
+      }
+      .main-right {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        max-height: 600px;
+        overflow-y: auto;
+      }
+      section {
+        border: 1px solid #333;
+        border-radius: 4px;
+        padding: 6px;
+        box-sizing: border-box;
+        background: #181818;
+      }
+      h3,
+      h4 {
+        margin: 0 0 4px;
+        font-size: 13px;
+      }
+      #waveCanvas {
+        width: 100%;
+        height: 260px;
+        border: 1px solid #444;
+        background: #000;
+      }
+      #histCanvas {
+        width: 100%;
+        height: 160px;
+        border: 1px solid #444;
+        background: #000;
+      }
+      .controls label {
+        display: block;
+        margin-bottom: 4px;
+      }
+      .controls input,
+      .controls select,
+      .controls button {
+        margin-bottom: 6px;
+      }
+      #capturesList {
+        max-height: 100%;
+        overflow-y: auto;
+        font-size: 12px;
+      }
+      button {
+        background: #2d2d2d;
+        color: #f5f5f5;
+        border: 1px solid #444;
+        padding: 3px 6px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #3a3a3a;
+      }
+      input,
+      select {
+        background: #1b1b1b;
+        color: #f5f5f5;
+        border: 1px solid #444;
+        font-size: 12px;
+      }
+      .controls,
+      #capturesList {
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>Scope Web DAQ</div>
+      <div id="status">status: -</div>
+    </header>
+    <main>
+      <div class="main-left">
+        <section>
+          <h3>Waveform</h3>
+          <canvas id="waveCanvas"></canvas>
+        </section>
+      </div>
+      <div class="main-right">
+        <section class="controls">
+          <h3>Controls</h3>
+        <div>
+          <button id="btnHealth">Health</button>
+        </div>
+        <hr />
+        <div>
+          <h4>Capture</h4>
+          <button id="btnCapture">Capture Once</button>
+          <label>
+            <input type="checkbox" id="chkSave" checked />
+            Save CSV/PNG/JSON
+          </label>
+        </div>
+        <hr />
+        <div>
+          <h4>Stream</h4>
+          <button id="btnStreamToggle">Start Stream</button>
+        </div>
+        <hr />
+        <div>
+          <h4>Trigger</h4>
+          <label>
+            Source
+            <select id="selTrigSource">
+              <option>CH1</option>
+              <option>CH2</option>
+              <option>EXT</option>
+              <option>LINE</option>
+            </select>
+          </label>
+          <label>
+            Mode
+            <select id="selTrigMode">
+              <option>AUTO</option>
+              <option>NORMAL</option>
+            </select>
+          </label>
+          <label>
+            Level (V)
+            <input id="inpTrigLevel" type="number" step="0.001" />
+          </label>
+          <button id="btnApplyTrigger">Apply Trigger</button>
+        </div>
+        <hr />
+          <div>
+            <h4>Baseline / Analysis</h4>
+            <label>
+              Baseline (V)
+              <input id="inpBaseline" type="number" step="0.001" />
+            </label>
+            <button id="btnSetBaseline">Set Baseline</button>
+            <button id="btnAnalyzeShot">Analyze & Append</button>
+            <button id="btnReloadHist">Reload Histogram</button>
+          </div>
+        </section>
+        <section>
+          <h3>Histogram</h3>
+          <canvas id="histCanvas"></canvas>
+        </section>
+        <section>
+          <h3>Captures</h3>
+          <div id="capturesList">(saving only, list not yet implemented)</div>
+        </section>
+      </div>
+    </main>
+
+    <script>
+      const statusEl = document.getElementById("status");
+      const waveCanvas = document.getElementById("waveCanvas");
+      const histCanvas = document.getElementById("histCanvas");
+      const waveCtx = waveCanvas.getContext("2d");
+      const histCtx = histCanvas.getContext("2d");
+
+      function resizeCanvases() {
+        waveCanvas.width = waveCanvas.clientWidth;
+        waveCanvas.height = waveCanvas.clientHeight;
+        histCanvas.width = histCanvas.clientWidth;
+        histCanvas.height = histCanvas.clientHeight;
+      }
+      window.addEventListener("resize", resizeCanvases);
+      resizeCanvases();
+
+      function setStatus(text) {
+        statusEl.textContent = "status: " + text;
+      }
+
+      function drawWaveform(time, voltage) {
+        const w = waveCanvas.width;
+        const h = waveCanvas.height;
+        waveCtx.clearRect(0, 0, w, h);
+        if (!time || time.length === 0) return;
+        const n = time.length;
+        const tMin = time[0];
+        const tMax = time[n - 1];
+        let vMin = voltage[0];
+        let vMax = voltage[0];
+        for (let i = 1; i < n; i++) {
+          if (voltage[i] < vMin) vMin = voltage[i];
+          if (voltage[i] > vMax) vMax = voltage[i];
+        }
+        const pad = 0.1 * (vMax - vMin || 1);
+        vMin -= pad;
+        vMax += pad;
+
+        waveCtx.beginPath();
+        for (let i = 0; i < n; i++) {
+          const x = ((time[i] - tMin) / (tMax - tMin || 1)) * w;
+          const y = h - ((voltage[i] - vMin) / (vMax - vMin || 1)) * h;
+          if (i === 0) waveCtx.moveTo(x, y);
+          else waveCtx.lineTo(x, y);
+        }
+        waveCtx.strokeStyle = "#0077cc";
+        waveCtx.lineWidth = 1;
+        waveCtx.stroke();
+      }
+
+      function drawHistogram(bins, counts) {
+        const w = histCanvas.width;
+        const h = histCanvas.height;
+        histCtx.clearRect(0, 0, w, h);
+        if (!bins || bins.length < 2 || !counts || counts.length === 0) return;
+        const maxCount = Math.max(...counts);
+        const barWidth = w / counts.length;
+        histCtx.fillStyle = "#cc5500";
+        for (let i = 0; i < counts.length; i++) {
+          const barHeight = (counts[i] / (maxCount || 1)) * (h - 4);
+          histCtx.fillRect(i * barWidth, h - barHeight, barWidth - 1, barHeight);
+        }
+      }
+
+      document.getElementById("btnHealth").onclick = async () => {
+        try {
+          const res = await fetch("/health");
+          const data = await res.json();
+          setStatus(data.status + " (" + (data.idn || "n/a") + ")");
+        } catch (e) {
+          setStatus("error " + e);
+        }
+      };
+
+      document.getElementById("btnCapture").onclick = async () => {
+        try {
+          const save = document.getElementById("chkSave").checked;
+          const res = await fetch("/api/capture_once", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ save }),
+          });
+          if (!res.ok) {
+            const text = await res.text();
+            setStatus("capture http " + res.status + ": " + text.slice(0, 80));
+            return;
+          }
+          const data = await res.json();
+          drawWaveform(data.time, data.voltage);
+          setStatus("capture ok");
+        } catch (e) {
+          setStatus("capture error " + e);
+        }
+      };
+
+      let ws = null;
+      document.getElementById("btnStreamToggle").onclick = () => {
+        if (ws) {
+          ws.close();
+          ws = null;
+          setStatus("stream stopped");
+          document.getElementById("btnStreamToggle").textContent = "Start Stream";
+          return;
+        }
+        ws = new WebSocket(
+          (location.protocol === "https:" ? "wss://" : "ws://") +
+            location.host +
+            "/ws/stream"
+        );
+        ws.onopen = () => {
+          setStatus("streaming...");
+          document.getElementById("btnStreamToggle").textContent = "Stop Stream";
+        };
+        ws.onmessage = (ev) => {
+          const data = JSON.parse(ev.data);
+          drawWaveform(data.time, data.voltage);
+        };
+        ws.onclose = () => {
+          ws = null;
+          document.getElementById("btnStreamToggle").textContent = "Start Stream";
+          setStatus("stream closed");
+        };
+        ws.onerror = () => {
+          setStatus("stream error");
+        };
+      };
+
+      document.getElementById("btnApplyTrigger").onclick = async () => {
+        const src = document.getElementById("selTrigSource").value;
+        const mode = document.getElementById("selTrigMode").value;
+        const level = parseFloat(
+          document.getElementById("inpTrigLevel").value || "0"
+        );
+        try {
+          await fetch("/trigger/source", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ source: src }),
+          });
+          await fetch("/trigger/mode", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ mode }),
+          });
+          await fetch("/trigger/level", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ level }),
+          });
+          setStatus("trigger updated");
+        } catch (e) {
+          setStatus("trigger error " + e);
+        }
+      };
+
+      document.getElementById("btnSetBaseline").onclick = async () => {
+        const v = parseFloat(
+          document.getElementById("inpBaseline").value || "0"
+        );
+        try {
+          const res = await fetch("/baseline/set", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ value: v }),
+          });
+          const data = await res.json();
+          setStatus("baseline=" + data.baseline);
+        } catch (e) {
+          setStatus("baseline error " + e);
+        }
+      };
+
+      document.getElementById("btnAnalyzeShot").onclick = async () => {
+        try {
+          const res = await fetch("/analysis/append", { method: "POST" });
+          const data = await res.json();
+          if (res.ok) {
+            setStatus(
+              "peak=" + data.peak.toFixed(6) + " (count=" + data.count + ")"
+            );
+          } else {
+            setStatus("analysis error " + (data.detail || "unknown"));
+          }
+        } catch (e) {
+          setStatus("analysis error " + e);
+        }
+      };
+
+      document.getElementById("btnReloadHist").onclick = async () => {
+        try {
+          const res = await fetch("/analysis/histogram");
+          const data = await res.json();
+          drawHistogram(data.bins, data.counts);
+          setStatus("hist count=" + (data.count || 0));
+        } catch (e) {
+          setStatus("hist error " + e);
+        }
+      };
+    </script>
+  </body>
+</html>
+
