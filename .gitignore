@@ -6,4 +6,4 @@ __pycache__/
 .Python
 .venv/
 
-scope_output
+outputs

@@ -35,7 +35,7 @@ CHANNEL = os.environ.get("OSC_CHANNEL", "CH1")  # CH1, CH2, CH3, CH4
 START_INDEX = int(os.environ.get("OSC_START_INDEX", "1"))
 STOP_INDEX = int(os.environ.get("OSC_STOP_INDEX", "10000"))
 TIMEOUT_MS = int(os.environ.get("OSC_TIMEOUT_MS", "30000"))
-OUTDIR = Path(os.environ.get("SCOPE_OUTDIR", "scope_output"))
+OUTDIR = Path(os.environ.get("OUTPUT_DIR", "outputs"))
 
 
 # =========================

@@ -116,6 +116,29 @@ class ScopeDriver:
 
             return time_s, volts, raw
 
+    def acquire_waveform_multi(
+        self, channels: list[str]
+    ) -> Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]]:
+        """
+        Acquire waveforms for multiple channels in one triggered acquisition.
+
+        For each channel in `channels`, this method:
+        - configures DATA:SOURCE / DATA:START / DATA:STOP
+        - reads CURVE? and waveform preamble
+
+        The returned dict maps channel name to (time_s, volts, raw).
+        The time axis is computed per channel but is expected to be identical
+        when the scope is configured with a shared horizontal scale.
+        """
+        results: Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+        for ch in channels:
+            # Reuse existing single-channel helpers to keep locking and
+            # configuration consistent.
+            self.setup_waveform_transfer(channel=ch)
+            time_s, volts, raw = self.acquire_waveform()
+            results[ch] = (time_s, volts, raw)
+        return results
+
     def get_basic_metadata(self, channel: str | None = None) -> Dict[str, Any]:
         with self._lock:
             scope = self.scope
@@ -207,16 +230,16 @@ def save_json(path: Path, payload: Dict[str, Any]) -> None:
 
 
 def build_capture_paths(outdir: Path, channel: str) -> Dict[str, Path]:
-    csv_dir = outdir / "csv"
-    meta_dir = outdir / "meta"
-    for d in (csv_dir, meta_dir):
+    """Return paths for one capture: outdir/CHx/csv/<timestamp>.csv and outdir/CHx/json/<timestamp>.json."""
+    ch_dir = outdir / sanitize_filename(channel)
+    csv_dir = ch_dir / "csv"
+    json_dir = ch_dir / "json"
+    for d in (csv_dir, json_dir):
         d.mkdir(parents=True, exist_ok=True)
-    # Use sub-second timestamp to avoid overwriting when saving
-    # multiple captures within the same second.
     now = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    base = sanitize_filename(f"{channel}_{now}")
+    base = sanitize_filename(now)
     return {
         "csv": csv_dir / f"{base}.csv",
-        "json": meta_dir / f"{base}.json",
+        "json": json_dir / f"{base}.json",
     }
 
