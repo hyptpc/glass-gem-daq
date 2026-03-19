@@ -1,9 +1,14 @@
 <!doctype html>
-<html lang="ja">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Scope Web DAQ</title>
+    <title>DAQ</title>
+    <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.27.0/plotly.min.js"></script>
     <style>
+      html,
+      body {
+        height: 100%;
+      }
       body {
         font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
           sans-serif;
@@ -11,34 +16,36 @@
         padding: 0;
         background: #121212;
         color: #e0e0e0;
+        overflow: hidden;
       }
       header {
-        padding: 6px 10px;
+        padding: 8px 12px;
         background: #1e1e1e;
         color: #f5f5f5;
-        font-size: 13px;
+        font-size: 15px;
         display: flex;
         justify-content: space-between;
         align-items: center;
       }
       main {
-        max-width: 1100px;
-        margin: 8px auto;
+        width: 100vw;
+        height: calc(100vh - 36px);
+        margin: 0;
         display: flex;
         gap: 8px;
         padding: 0 8px;
         box-sizing: border-box;
       }
       .main-left {
-        flex: 2;
+        flex: 3;
+        display: flex;
+        flex-direction: column;
       }
       .main-right {
-        flex: 1;
+        flex: 2;
         display: flex;
         flex-direction: column;
         gap: 8px;
-        max-height: 600px;
-        overflow-y: auto;
       }
       section {
         border: 1px solid #333;
@@ -49,92 +56,184 @@
       }
       h3,
       h4 {
-        margin: 0 0 4px;
+        margin: 0 0 6px;
+        font-size: 15px;
+      }
+      #wavePlot, #histPlot {
+        width: 100%;
+        height: 100%;
+        min-height: 120px;
+        background: #000;
+      }
+      .hist-section {
+        display: flex;
+        flex-direction: column;
+        margin-top: 8px;
+        border-radius: 6px;
+        overflow: hidden;
+      }
+      .hist-section .hist-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 6px 8px;
+        background: #1a1a1a;
+        border-bottom: 1px solid #333;
+      }
+      .hist-section .hist-count {
+        font-size: 13px;
+        color: #81c784;
+      }
+      .hist-section .hist-empty {
+        padding: 24px 16px;
+        text-align: center;
+        color: #666;
         font-size: 13px;
       }
-      #waveCanvas {
-        width: 100%;
-        height: 260px;
-        border: 1px solid #444;
-        background: #000;
-      }
-      #histCanvas {
-        width: 100%;
-        height: 160px;
-        border: 1px solid #444;
-        background: #000;
+      #histPlot {
+        min-height: 180px;
+        flex: 1;
       }
       .controls label {
         display: block;
-        margin-bottom: 4px;
+        margin-bottom: 6px;
+        font-size: 14px;
       }
       .controls input,
-      .controls select,
+      .controls select {
+        margin-bottom: 8px;
+      }
       .controls button {
-        margin-bottom: 6px;
+        margin-right: 8px;
+        margin-bottom: 8px;
       }
       #capturesList {
         max-height: 100%;
         overflow-y: auto;
-        font-size: 12px;
+        font-size: 14px;
       }
       button {
         background: #2d2d2d;
         color: #f5f5f5;
-        border: 1px solid #444;
-        padding: 3px 6px;
-        font-size: 12px;
+        border: 1px solid #555;
+        border-radius: 6px;
+        padding: 8px 14px;
+        font-size: 14px;
         cursor: pointer;
+        min-height: 36px;
       }
       button:hover {
-        background: #3a3a3a;
+        background: #3d3d3d;
+        border-color: #666;
+      }
+      button:active {
+        background: #252525;
       }
       input,
       select {
         background: #1b1b1b;
         color: #f5f5f5;
         border: 1px solid #444;
-        font-size: 12px;
+        border-radius: 4px;
+        padding: 6px 8px;
+        font-size: 14px;
       }
       .controls,
       #capturesList {
-        font-size: 12px;
+        font-size: 14px;
+      }
+      #activityBadge {
+        margin-right: 12px;
+        font-size: 13px;
+        font-weight: 600;
+      }
+      #activityBadge.streaming {
+        color: #4fc3f7;
+      }
+      #activityBadge.recording {
+        color: #81c784;
+      }
+      #activityBadge .dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-right: 6px;
+        vertical-align: middle;
+      }
+      #activityBadge.streaming .dot {
+        background: #4fc3f7;
+        animation: pulse 1.2s ease-in-out infinite;
+      }
+      #activityBadge.recording .dot {
+        background: #81c784;
+        animation: pulse 1.2s ease-in-out infinite;
+      }
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.4; }
+      }
+      .section-busy {
+        border-left: 4px solid #81c784;
+        padding-left: 10px;
+        margin-left: 2px;
+        background: rgba(129, 199, 132, 0.1);
+        border-radius: 0 4px 4px 0;
+      }
+      .section-busy.stream-section {
+        border-left-color: #4fc3f7;
+        background: rgba(79, 195, 247, 0.1);
       }
     </style>
   </head>
   <body>
     <header>
-      <div>Scope Web DAQ</div>
-      <div id="status">status: -</div>
+      <div style="display: flex; align-items: center; margin-left: auto;">
+        <div id="activityBadge"></div>
+        <div id="status">status: -</div>
+      </div>
     </header>
     <main>
       <div class="main-left">
-        <section>
-          <h3>Waveform</h3>
-          <canvas id="waveCanvas"></canvas>
+        <section style="flex: 2; display: flex; flex-direction: column;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h3>Waveform</h3>
+            <div id="freqDisplay" style="font-size: 14px; color: #81c784;">— Hz</div>
+          </div>
+          <div id="wavePlot"></div>
+        </section>
+        <section class="hist-section" style="flex: 1;">
+          <div class="hist-header">
+            <h3 style="margin: 0;">Histogram</h3>
+            <div id="histCount" class="hist-count">—</div>
+          </div>
+          <div id="histPlot"></div>
         </section>
       </div>
       <div class="main-right">
         <section class="controls">
           <h3>Controls</h3>
-        <div>
-          <button id="btnHealth">Health</button>
-        </div>
-        <hr />
-        <div>
-          <h4>Capture</h4>
-          <button id="btnCapture">Capture Once</button>
-          <label>
-            <input type="checkbox" id="chkSave" checked />
-            Save CSV/PNG/JSON
-          </label>
-        </div>
-        <hr />
-        <div>
-          <h4>Stream</h4>
-          <button id="btnStreamToggle">Start Stream</button>
-        </div>
-        <hr />
+          <div>
+            <button id="btnHealth">Health</button>
+          </div>
+          <hr />
+          <div>
+            <h4>Run</h4>
+            <label>
+              Run ID
+              <input
+                id="inpRunId"
+                type="text"
+                placeholder="run_20260316_test1"
+              />
+            </label>
+          </div>
+          <hr />
+          <div id="streamBlock">
+            <h4>Stream</h4>
+            <button id="btnStreamToggle">Start Stream</button>
+          </div>
+          <hr />
         <div>
           <h4>Trigger</h4>
           <label>
@@ -154,96 +253,178 @@
             </select>
           </label>
           <label>
-            Level (V)
-            <input id="inpTrigLevel" type="number" step="0.001" />
+            Level (mV)
+            <input id="inpTrigLevel" type="number" step="0.1" />
           </label>
           <button id="btnApplyTrigger">Apply Trigger</button>
         </div>
         <hr />
           <div>
-            <h4>Baseline / Analysis</h4>
+            <h4>Histogram Settings</h4>
             <label>
-              Baseline (V)
-              <input id="inpBaseline" type="number" step="0.001" />
+              Baseline (mV)
+              <input id="inpBaseline" type="number" step="0.1" />
             </label>
             <button id="btnSetBaseline">Set Baseline</button>
-            <button id="btnAnalyzeShot">Analyze & Append</button>
-            <button id="btnReloadHist">Reload Histogram</button>
+            <button id="btnReloadHist">Draw Histogram</button>
+            <button id="btnClearHist">Clear Histogram</button>
+            <div style="margin-top:8px;font-size:13px;color:#aaa;">
+              Histogram draw batch
+              <input
+                id="inpHistBatch"
+                type="number"
+                min="1"
+                step="1"
+                value="10"
+                style="width:90px; margin-left:8px;"
+              />
+            </div>
+          </div>
+          <hr />
+          <div id="triggerCaptureBlock">
+            <h4>Triggered capture</h4>
+            <button id="btnStartTriggered">Start Triggered Capture</button>
+            <button id="btnStopTriggered">Stop Triggered Capture</button>
+            <div id="triggerStatus" style="margin-top:4px;font-size:13px;color:#ddd;">
+              Triggered capture: idle
+            </div>
+            <div id="triggerStats" style="margin-top:2px;font-size:12px;color:#999;">
+              Total: 0, Rate: -, Duration: -, Last: -
+            </div>
           </div>
         </section>
-        <section>
-          <h3>Histogram</h3>
-          <canvas id="histCanvas"></canvas>
-        </section>
-        <section>
-          <h3>Captures</h3>
-          <div id="capturesList">(saving only, list not yet implemented)</div>
-        </section>
+        <!-- Captures list section removed -->
       </div>
     </main>
 
     <script>
       const statusEl = document.getElementById("status");
-      const waveCanvas = document.getElementById("waveCanvas");
-      const histCanvas = document.getElementById("histCanvas");
-      const waveCtx = waveCanvas.getContext("2d");
-      const histCtx = histCanvas.getContext("2d");
+      const activityBadgeEl = document.getElementById("activityBadge");
+      const streamBlockEl = document.getElementById("streamBlock");
+      const triggerCaptureBlockEl = document.getElementById("triggerCaptureBlock");
+      let baselineValue = null;
+      let isStreaming = false;
+      let isRecording = false;
 
-      function resizeCanvases() {
-        waveCanvas.width = waveCanvas.clientWidth;
-        waveCanvas.height = waveCanvas.clientHeight;
-        histCanvas.width = histCanvas.clientWidth;
-        histCanvas.height = histCanvas.clientHeight;
+      function updateActivityBadge() {
+        if (!activityBadgeEl) return;
+        activityBadgeEl.className = "";
+        activityBadgeEl.textContent = "";
+        if (isRecording) {
+          activityBadgeEl.className = "recording";
+          activityBadgeEl.innerHTML = '<span class="dot"></span>RECORDING';
+        } else if (isStreaming) {
+          activityBadgeEl.className = "streaming";
+          activityBadgeEl.innerHTML = '<span class="dot"></span>STREAMING';
+        }
+        if (streamBlockEl) {
+          streamBlockEl.classList.toggle("section-busy", isStreaming);
+          streamBlockEl.classList.toggle("stream-section", isStreaming);
+        }
+        if (triggerCaptureBlockEl) {
+          triggerCaptureBlockEl.classList.toggle("section-busy", isRecording);
+        }
       }
-      window.addEventListener("resize", resizeCanvases);
-      resizeCanvases();
+      const plotLayoutDark = {
+        paper_bgcolor: "#121212",
+        plot_bgcolor: "#000",
+        font: { color: "#e0e0e0", size: 13 },
+        margin: { t: 28, r: 28, b: 44, l: 52 },
+        xaxis: { gridcolor: "#333", zerolinecolor: "#444" },
+        yaxis: { gridcolor: "#333", zerolinecolor: "#444" },
+        showlegend: false,
+      };
 
       function setStatus(text) {
         statusEl.textContent = "status: " + text;
       }
 
       function drawWaveform(time, voltage) {
-        const w = waveCanvas.width;
-        const h = waveCanvas.height;
-        waveCtx.clearRect(0, 0, w, h);
         if (!time || time.length === 0) return;
-        const n = time.length;
+        const voltageMv = voltage.map((v) => v * 1000);
         const tMin = time[0];
-        const tMax = time[n - 1];
-        let vMin = voltage[0];
-        let vMax = voltage[0];
-        for (let i = 1; i < n; i++) {
-          if (voltage[i] < vMin) vMin = voltage[i];
-          if (voltage[i] > vMax) vMax = voltage[i];
+        const tMax = time[time.length - 1];
+        const shapes = [];
+        if (baselineValue != null) {
+          shapes.push({
+            type: "line",
+            x0: tMin, x1: tMax,
+            y0: baselineValue, y1: baselineValue,
+            xref: "x", yref: "y",
+            line: { color: "#0a0", width: 1, dash: "dot" },
+            name: "Baseline",
+          });
         }
-        const pad = 0.1 * (vMax - vMin || 1);
-        vMin -= pad;
-        vMax += pad;
-
-        waveCtx.beginPath();
-        for (let i = 0; i < n; i++) {
-          const x = ((time[i] - tMin) / (tMax - tMin || 1)) * w;
-          const y = h - ((voltage[i] - vMin) / (vMax - vMin || 1)) * h;
-          if (i === 0) waveCtx.moveTo(x, y);
-          else waveCtx.lineTo(x, y);
+        const trigLevelMv = parseFloat(document.getElementById("inpTrigLevel").value);
+        if (!Number.isNaN(trigLevelMv)) {
+          shapes.push({
+            type: "line",
+            x0: tMin, x1: tMax,
+            y0: trigLevelMv, y1: trigLevelMv,
+            xref: "x", yref: "y",
+            line: { color: "#f80", width: 1, dash: "dash" },
+            name: "Trigger",
+          });
         }
-        waveCtx.strokeStyle = "#0077cc";
-        waveCtx.lineWidth = 1;
-        waveCtx.stroke();
+        const layout = {
+          ...plotLayoutDark,
+          xaxis: { ...plotLayoutDark.xaxis, title: "Time [s]" },
+          yaxis: { ...plotLayoutDark.yaxis, title: "Voltage [mV]" },
+          shapes,
+        };
+        Plotly.react("wavePlot", [{
+          x: time,
+          y: voltageMv,
+          type: "scatter",
+          mode: "lines",
+          line: { color: "#0077cc", width: 1 },
+        }], layout, { responsive: true });
       }
 
       function drawHistogram(bins, counts) {
-        const w = histCanvas.width;
-        const h = histCanvas.height;
-        histCtx.clearRect(0, 0, w, h);
-        if (!bins || bins.length < 2 || !counts || counts.length === 0) return;
-        const maxCount = Math.max(...counts);
-        const barWidth = w / counts.length;
-        histCtx.fillStyle = "#cc5500";
-        for (let i = 0; i < counts.length; i++) {
-          const barHeight = (counts[i] / (maxCount || 1)) * (h - 4);
-          histCtx.fillRect(i * barWidth, h - barHeight, barWidth - 1, barHeight);
+        const countEl = document.getElementById("histCount");
+        if (!bins || bins.length < 2 || !counts || counts.length === 0) {
+          if (countEl) countEl.textContent = "—";
+          Plotly.react(
+            "histPlot",
+            [],
+            {
+              ...plotLayoutDark,
+              xaxis: { ...plotLayoutDark.xaxis, title: "Peak diff [mV]" },
+              yaxis: { ...plotLayoutDark.yaxis, title: "Count" },
+            },
+            { responsive: true }
+          );
+          return;
         }
+        const total = counts.reduce((a, b) => a + b, 0);
+        if (countEl) countEl.textContent = total + " samples";
+        // Reconstruct sample array from (bins, counts) so Plotly draws a real histogram.
+        const samplesMv = [];
+        for (let i = 0; i < counts.length; i++) {
+          const left = bins[i];
+          const right = bins[i + 1];
+          const centerMv = ((left + right) / 2) * 1000;
+          const n = counts[i];
+          for (let k = 0; k < n; k++) samplesMv.push(centerMv);
+        }
+        Plotly.react(
+          "histPlot",
+          [{
+            x: samplesMv,
+            type: "histogram",
+            marker: {
+              color: "rgba(0,0,0,0)",
+              line: { color: "#cc5500", width: 1.5 },
+            },
+          }],
+          {
+            ...plotLayoutDark,
+            xaxis: { ...plotLayoutDark.xaxis, title: "Peak diff [mV]" },
+            yaxis: { ...plotLayoutDark.yaxis, title: "Count" },
+          },
+          { responsive: true }
+        );
       }
 
       document.getElementById("btnHealth").onclick = async () => {
@@ -256,34 +437,58 @@
         }
       };
 
-      document.getElementById("btnCapture").onclick = async () => {
-        try {
-          const save = document.getElementById("chkSave").checked;
-          const res = await fetch("/api/capture_once", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ save }),
-          });
-          if (!res.ok) {
-            const text = await res.text();
-            setStatus("capture http " + res.status + ": " + text.slice(0, 80));
-            return;
+      function computeFrequencyHz(time, voltage) {
+        if (!time || time.length < 3 || !voltage || voltage.length !== time.length)
+          return null;
+        const mean =
+          voltage.reduce((a, b) => a + b, 0) / voltage.length;
+        const crossings = [];
+        for (let i = 1; i < voltage.length; i++) {
+          const v0 = voltage[i - 1] - mean;
+          const v1 = voltage[i] - mean;
+          if (v0 < 0 && v1 >= 0) {
+            const dt = time[i] - time[i - 1];
+            const t =
+              dt > 0
+                ? time[i - 1] + dt * (-v0) / (v1 - v0)
+                : time[i - 1];
+            crossings.push(t);
           }
-          const data = await res.json();
-          drawWaveform(data.time, data.voltage);
-          setStatus("capture ok");
-        } catch (e) {
-          setStatus("capture error " + e);
         }
-      };
+        if (crossings.length < 2) return null;
+        const period =
+          2 * (crossings[crossings.length - 1] - crossings[0]) /
+          (crossings.length - 1);
+        return period > 0 ? 1 / period : null;
+      }
+
+      function updateFreqDisplay(time, voltage) {
+        const el = document.getElementById("freqDisplay");
+        if (!el) return;
+        const f = computeFrequencyHz(time, voltage);
+        if (f != null && f > 0 && f < 1e9) {
+          el.textContent = f >= 1000 ? (f / 1000).toFixed(2) + " kHz" : f.toFixed(2) + " Hz";
+          el.style.color = "#81c784";
+        } else {
+          el.textContent = "— Hz";
+          el.style.color = "#666";
+        }
+      }
 
       let ws = null;
       document.getElementById("btnStreamToggle").onclick = () => {
         if (ws) {
           ws.close();
           ws = null;
+          isStreaming = false;
+          updateActivityBadge();
           setStatus("stream stopped");
           document.getElementById("btnStreamToggle").textContent = "Start Stream";
+          updateFreqDisplay(null, null);
+          if (triggerStatusTimer && !isRecording) {
+            clearInterval(triggerStatusTimer);
+            triggerStatusTimer = null;
+          }
           return;
         }
         ws = new WebSocket(
@@ -292,17 +497,31 @@
             "/ws/stream"
         );
         ws.onopen = () => {
+          isStreaming = true;
+          updateActivityBadge();
           setStatus("streaming...");
           document.getElementById("btnStreamToggle").textContent = "Stop Stream";
+          if (!triggerStatusTimer) {
+            triggerStatusTimer = setInterval(refreshTriggerStatus, 1000);
+            refreshTriggerStatus();
+          }
         };
         ws.onmessage = (ev) => {
           const data = JSON.parse(ev.data);
           drawWaveform(data.time, data.voltage);
+          updateFreqDisplay(data.time, data.voltage);
         };
         ws.onclose = () => {
           ws = null;
+          isStreaming = false;
+          updateActivityBadge();
           document.getElementById("btnStreamToggle").textContent = "Start Stream";
           setStatus("stream closed");
+          updateFreqDisplay(null, null);
+          if (triggerStatusTimer && !isRecording) {
+            clearInterval(triggerStatusTimer);
+            triggerStatusTimer = null;
+          }
         };
         ws.onerror = () => {
           setStatus("stream error");
@@ -312,9 +531,10 @@
       document.getElementById("btnApplyTrigger").onclick = async () => {
         const src = document.getElementById("selTrigSource").value;
         const mode = document.getElementById("selTrigMode").value;
-        const level = parseFloat(
+        const levelMv = parseFloat(
           document.getElementById("inpTrigLevel").value || "0"
         );
+        const level = levelMv / 1000;
         try {
           await fetch("/trigger/source", {
             method: "POST",
@@ -338,35 +558,21 @@
       };
 
       document.getElementById("btnSetBaseline").onclick = async () => {
-        const v = parseFloat(
+        const mv = parseFloat(
           document.getElementById("inpBaseline").value || "0"
         );
         try {
           const res = await fetch("/baseline/set", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ value: v }),
+            body: JSON.stringify({ value: mv / 1000 }),
           });
           const data = await res.json();
-          setStatus("baseline=" + data.baseline);
+          baselineValue = data.baseline != null ? data.baseline * 1000 : null;
+          if (baselineValue != null) document.getElementById("inpBaseline").value = baselineValue;
+          setStatus("baseline=" + baselineValue + " mV");
         } catch (e) {
           setStatus("baseline error " + e);
-        }
-      };
-
-      document.getElementById("btnAnalyzeShot").onclick = async () => {
-        try {
-          const res = await fetch("/analysis/append", { method: "POST" });
-          const data = await res.json();
-          if (res.ok) {
-            setStatus(
-              "peak=" + data.peak.toFixed(6) + " (count=" + data.count + ")"
-            );
-          } else {
-            setStatus("analysis error " + (data.detail || "unknown"));
-          }
-        } catch (e) {
-          setStatus("analysis error " + e);
         }
       };
 
@@ -378,6 +584,217 @@
           setStatus("hist count=" + (data.count || 0));
         } catch (e) {
           setStatus("hist error " + e);
+        }
+      };
+
+      document.getElementById("btnClearHist").onclick = async () => {
+        try {
+          await fetch("/analysis/clear", { method: "POST" });
+          drawHistogram([], []);
+          setStatus("histogram cleared");
+          lastHistogramDisplayedHistCount = 0;
+        } catch (e) {
+          setStatus("clear error " + e);
+        }
+      };
+
+      const triggerStatusEl = document.getElementById("triggerStatus");
+      const triggerStatsEl = document.getElementById("triggerStats");
+      let triggerStatusTimer = null;
+
+      function setTriggerStatus(
+        active,
+        runId,
+        count,
+        ratePerMin,
+        durationSec,
+        lastSaved,
+        histCount
+      ) {
+        isRecording = !!active;
+        updateActivityBadge();
+        if (!triggerStatusEl) return;
+        if (!triggerStatsEl) return;
+        if (!active) {
+          triggerStatusEl.textContent = "Triggered capture: idle";
+          triggerStatsEl.textContent =
+            "Total: 0, Hist: " + (histCount ?? 0) + ", Rate: -, Duration: -, Last: -";
+        } else {
+          triggerStatusEl.textContent =
+            "Triggered capture: running (run_id=" +
+            (runId || "n/a") +
+            ", saved=" +
+            count +
+            ")";
+          const rateText =
+            typeof ratePerMin === "number"
+              ? ratePerMin.toFixed(1) + " / min"
+              : "-";
+          let durationText = "-";
+          if (typeof durationSec === "number") {
+            const d = Math.max(0, Math.floor(durationSec));
+            const h = Math.floor(d / 3600);
+            const m = Math.floor((d % 3600) / 60);
+            const s = d % 60;
+            durationText =
+              (h > 0 ? String(h).padStart(2, "0") + ":" : "") +
+              String(m).padStart(2, "0") +
+              ":" +
+              String(s).padStart(2, "0");
+          }
+          const lastText = lastSaved || "-";
+          triggerStatsEl.textContent =
+            "Total: " +
+            count +
+            ", Hist: " +
+            (histCount ?? 0) +
+            ", Rate: " +
+            rateText +
+            ", Duration: " +
+            durationText +
+            ", Last: " +
+            lastText;
+        }
+      }
+
+      function getHistBatch() {
+        const el = document.getElementById("inpHistBatch");
+        const v = el ? parseInt(el.value, 10) : 10;
+        return Number.isFinite(v) && v > 0 ? v : 10;
+      }
+
+      let lastHistogramDisplayedHistCount = 0;
+
+      async function refreshTriggerStatus() {
+        try {
+          const res = await fetch("/trigger_capture/status");
+          const data = await res.json();
+          const wasRecording = isRecording;
+          isRecording = !!data.active;
+          updateActivityBadge();
+          setTriggerStatus(
+            data.active,
+            data.run_id,
+            data.saved_count || 0,
+            data.rate_per_min ?? null,
+            data.duration_s ?? null,
+            data.last_saved_at || null,
+            data.histogram_count || 0
+          );
+
+          const batch = getHistBatch();
+          const histCount = data.histogram_count || 0;
+
+          const monitorActive = data.active || isStreaming;
+          let shouldDraw = false;
+          if (monitorActive) {
+            shouldDraw =
+              lastHistogramDisplayedHistCount === 0 ||
+              histCount - lastHistogramDisplayedHistCount >= batch;
+          } else {
+            // When stopping triggered capture (and not streaming), draw once.
+            shouldDraw =
+              wasRecording &&
+              histCount > lastHistogramDisplayedHistCount &&
+              histCount > 0;
+          }
+
+          if (shouldDraw) {
+            lastHistogramDisplayedHistCount = histCount;
+            const hres = await fetch("/analysis/histogram");
+            const hdata = await hres.json();
+            drawHistogram(hdata.bins, hdata.counts);
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      document.getElementById("btnStartTriggered").onclick = async () => {
+        const runId = document.getElementById("inpRunId").value || null;
+        try {
+          const res = await fetch("/trigger_capture/start", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ run_id: runId }),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            setStatus(
+              "triggered capture start http " +
+                res.status +
+                ": " +
+                (data.detail || JSON.stringify(data)).slice(0, 80)
+            );
+            return;
+          }
+          setStatus(
+            "triggered capture started (run_id=" +
+              data.run_id +
+              ", saved=" +
+              (data.saved_count || 0) +
+              ")"
+          );
+          lastHistogramDisplayedHistCount = 0;
+          setTriggerStatus(
+            true,
+            data.run_id,
+            data.saved_count || 0,
+            0,
+            0,
+            null,
+            data.histogram_count || 0
+          );
+          if (!triggerStatusTimer) {
+            triggerStatusTimer = setInterval(refreshTriggerStatus, 1000);
+            refreshTriggerStatus();
+          }
+        } catch (e) {
+          setStatus("triggered capture start error " + e);
+        }
+      };
+
+      fetch("/baseline").then((r) => r.json()).then((d) => {
+        if (d.baseline != null) {
+          baselineValue = d.baseline * 1000;
+          document.getElementById("inpBaseline").value = baselineValue;
+        }
+      }).catch(() => {});
+
+      document.getElementById("btnStopTriggered").onclick = async () => {
+        try {
+          const res = await fetch("/trigger_capture/stop", { method: "POST" });
+          const data = await res.json();
+          setStatus(
+            "triggered capture stopped (run_id=" +
+              (data.run_id || "n/a") +
+              ", saved=" +
+              (data.saved_count || 0) +
+              ")"
+          );
+          setTriggerStatus(
+            false,
+            null,
+            data.saved_count || 0,
+            null,
+            null,
+            data.last_saved_at || null,
+            data.histogram_count || 0
+          );
+          if (triggerStatusTimer) {
+            if (!isStreaming) {
+              clearInterval(triggerStatusTimer);
+              triggerStatusTimer = null;
+            }
+          }
+          lastHistogramDisplayedHistCount = 0;
+          try {
+            const hres = await fetch("/analysis/histogram");
+            const hdata = await hres.json();
+            drawHistogram(hdata.bins, hdata.counts);
+          } catch (e) {}
+        } catch (e) {
+          setStatus("triggered capture stop error " + e);
         }
       };
     </script>

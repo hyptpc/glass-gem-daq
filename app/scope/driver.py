@@ -7,6 +7,7 @@ from typing import Any, Dict, Tuple
 
 import json
 import re
+import threading
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -33,6 +34,7 @@ class ScopeConfig:
 class ScopeDriver:
     def __init__(self, config: ScopeConfig) -> None:
         self.config = config
+        self._lock = threading.Lock()
         self._rm: pyvisa.ResourceManager | None = None
         self._scope: pyvisa.resources.MessageBasedResource | None = None
 
@@ -52,6 +54,11 @@ class ScopeDriver:
         scope.read_termination = "\n"
         scope.write_termination = "\n"
         self._scope = scope
+
+    def get_idn(self) -> str:
+        """Return *IDN? result (thread-safe)."""
+        with self._lock:
+            return self.scope.query("*IDN?").strip()
 
     def close(self) -> None:
         if self._scope is not None:
@@ -73,93 +80,100 @@ class ScopeDriver:
         start: int | None = None,
         stop: int | None = None,
     ) -> None:
-        ch = channel or self.config.channel
-        start_idx = start if start is not None else self.config.start_index
-        stop_idx = stop if stop is not None else self.config.stop_index
+        with self._lock:
+            ch = channel or self.config.channel
+            start_idx = start if start is not None else self.config.start_index
+            stop_idx = stop if stop is not None else self.config.stop_index
 
-        scope = self.scope
-        scope.write("HEADER 0")
-        scope.write(f"DATA:SOURCE {ch}")
-        scope.write(f"DATA:START {start_idx}")
-        scope.write(f"DATA:STOP {stop_idx}")
-        scope.write("DATA:ENCDG RIBINARY")
-        scope.write("DATA:WIDTH 1")
+            scope = self.scope
+            scope.write("HEADER 0")
+            scope.write(f"DATA:SOURCE {ch}")
+            scope.write(f"DATA:START {start_idx}")
+            scope.write(f"DATA:STOP {stop_idx}")
+            scope.write("DATA:ENCDG RIBINARY")
+            scope.write("DATA:WIDTH 1")
 
     def acquire_waveform(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        scope = self.scope
+        with self._lock:
+            scope = self.scope
 
-        raw = scope.query_binary_values(
-            "CURVE?",
-            datatype="b",
-            container=np.array,
-        )
+            raw = scope.query_binary_values(
+                "CURVE?",
+                datatype="b",
+                container=np.array,
+            )
 
-        ymult = float(scope.query("WFMOUTPRE:YMULT?"))
-        yzero = float(scope.query("WFMOUTPRE:YZERO?"))
-        yoff = float(scope.query("WFMOUTPRE:YOFF?"))
+            ymult = float(scope.query("WFMOUTPRE:YMULT?"))
+            yzero = float(scope.query("WFMOUTPRE:YZERO?"))
+            yoff = float(scope.query("WFMOUTPRE:YOFF?"))
 
-        xincr = float(scope.query("WFMOUTPRE:XINCR?"))
-        xzero = float(scope.query("WFMOUTPRE:XZERO?"))
-        ptoff = float(scope.query("WFMOUTPRE:PT_OFF?"))
+            xincr = float(scope.query("WFMOUTPRE:XINCR?"))
+            xzero = float(scope.query("WFMOUTPRE:XZERO?"))
+            ptoff = float(scope.query("WFMOUTPRE:PT_OFF?"))
 
-        volts = (raw - yoff) * ymult + yzero
-        time_s = (np.arange(len(raw)) - ptoff) * xincr + xzero
+            volts = (raw - yoff) * ymult + yzero
+            time_s = (np.arange(len(raw)) - ptoff) * xincr + xzero
 
-        return time_s, volts, raw
+            return time_s, volts, raw
 
     def get_basic_metadata(self, channel: str | None = None) -> Dict[str, Any]:
-        scope = self.scope
-        ch = channel or self.config.channel
+        with self._lock:
+            scope = self.scope
+            ch = channel or self.config.channel
 
-        idn = scope.query("*IDN?").strip()
-        try:
-            record_length = scope.query("HORIZONTAL:RECORDLENGTH?").strip()
-        except Exception:
-            record_length = "unknown"
+            idn = scope.query("*IDN?").strip()
+            try:
+                record_length = scope.query("HORIZONTAL:RECORDLENGTH?").strip()
+            except Exception:
+                record_length = "unknown"
 
-        try:
-            vscale = scope.query(f"{ch}:SCALE?").strip()
-        except Exception:
-            vscale = "unknown"
+            try:
+                vscale = scope.query(f"{ch}:SCALE?").strip()
+            except Exception:
+                vscale = "unknown"
 
-        try:
-            hscale = scope.query("HORIZONTAL:SCALE?").strip()
-        except Exception:
-            hscale = "unknown"
+            try:
+                hscale = scope.query("HORIZONTAL:SCALE?").strip()
+            except Exception:
+                hscale = "unknown"
 
-        return {
-            "idn": idn,
-            "channel": ch,
-            "record_length": record_length,
-            "vscale": vscale,
-            "hscale": hscale,
-        }
+            return {
+                "idn": idn,
+                "channel": ch,
+                "record_length": record_length,
+                "vscale": vscale,
+                "hscale": hscale,
+            }
 
     def get_trigger_state(self) -> Dict[str, Any]:
-        scope = self.scope
-        state: Dict[str, Any] = {}
-        try:
-            state["mode"] = scope.query("TRIGGER:A:MODE?").strip()
-        except Exception:
-            state["mode"] = "unknown"
-        try:
-            state["source"] = scope.query("TRIGGER:A:EDGE:SOURCE?").strip()
-        except Exception:
-            state["source"] = "unknown"
-        try:
-            state["level"] = float(scope.query("TRIGGER:A:LEVEL?"))
-        except Exception:
-            state["level"] = None
-        return state
+        with self._lock:
+            scope = self.scope
+            state: Dict[str, Any] = {}
+            try:
+                state["mode"] = scope.query("TRIGGER:A:MODE?").strip()
+            except Exception:
+                state["mode"] = "unknown"
+            try:
+                state["source"] = scope.query("TRIGGER:A:EDGE:SOURCE?").strip()
+            except Exception:
+                state["source"] = "unknown"
+            try:
+                state["level"] = float(scope.query("TRIGGER:A:LEVEL?"))
+            except Exception:
+                state["level"] = None
+            return state
 
     def set_trigger_source(self, source: str) -> None:
-        self.scope.write(f"TRIGGER:A:EDGE:SOURCE {source}")
+        with self._lock:
+            self.scope.write(f"TRIGGER:A:EDGE:SOURCE {source}")
 
     def set_trigger_mode(self, mode: str) -> None:
-        self.scope.write(f"TRIGGER:A:MODE {mode}")
+        with self._lock:
+            self.scope.write(f"TRIGGER:A:MODE {mode}")
 
     def set_trigger_level(self, level: float) -> None:
-        self.scope.write(f"TRIGGER:A:LEVEL {level}")
+        with self._lock:
+            self.scope.write(f"TRIGGER:A:LEVEL {level}")
 
 
 def save_csv(path: Path, time_s: np.ndarray, volts: np.ndarray) -> None:
@@ -193,11 +207,16 @@ def save_json(path: Path, payload: Dict[str, Any]) -> None:
 
 
 def build_capture_paths(outdir: Path, channel: str) -> Dict[str, Path]:
-    outdir.mkdir(parents=True, exist_ok=True)
-    now = datetime.now().strftime("%Y%m%d_%H%M%S")
+    csv_dir = outdir / "csv"
+    meta_dir = outdir / "meta"
+    for d in (csv_dir, meta_dir):
+        d.mkdir(parents=True, exist_ok=True)
+    # Use sub-second timestamp to avoid overwriting when saving
+    # multiple captures within the same second.
+    now = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     base = sanitize_filename(f"{channel}_{now}")
-    csv_path = outdir / f"{base}.csv"
-    png_path = outdir / f"{base}.png"
-    json_path = outdir / f"{base}.json"
-    return {"csv": csv_path, "png": png_path, "json": json_path}
+    return {
+        "csv": csv_dir / f"{base}.csv",
+        "json": meta_dir / f"{base}.json",
+    }
 

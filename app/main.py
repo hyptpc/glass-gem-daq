@@ -25,7 +25,6 @@ from app.scope import (
     build_capture_paths,
     save_csv,
     save_json,
-    save_plot,
 )
 
 
@@ -42,8 +41,12 @@ driver_lock = asyncio.Lock()
 
 baseline_value: Optional[float] = None
 histogram_values: List[float] = []
-logging_task: Optional[asyncio.Task] = None
-logging_active_run: Optional[str] = None
+trigger_capture_task: Optional[asyncio.Task] = None
+trigger_capture_active_run: Optional[str] = None
+trigger_capture_saved_count: int = 0
+trigger_capture_started_at: Optional[datetime] = None
+trigger_capture_last_saved_at: Optional[datetime] = None
+trigger_capture_stop_requested: bool = False
 
 app = FastAPI()
 
@@ -67,7 +70,7 @@ async def shutdown_event() -> None:
 async def health() -> Dict[str, Any]:
     try:
         async with driver_lock:
-            idn = driver.scope.query("*IDN?").strip()
+            idn = driver.get_idn()
         return {"status": "ok", "idn": idn}
     except Exception as exc:
         return JSONResponse(
@@ -122,10 +125,13 @@ async def set_trigger_level(payload: Dict[str, Any]) -> Dict[str, Any]:
 async def capture_once(payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     save = False
     channel = DEFAULT_CHANNEL
+    run_id: Optional[str] = None
     if payload:
         save = bool(payload.get("save", False))
         if "channel" in payload:
             channel = str(payload["channel"])
+        if payload.get("run_id"):
+            run_id = str(payload["run_id"])
 
     async with driver_lock:
         driver.config.channel = channel
@@ -137,11 +143,10 @@ async def capture_once(payload: Optional[Dict[str, Any]] = None) -> Dict[str, An
     meta["timestamp_local"] = datetime.now().isoformat(timespec="seconds")
 
     if save:
-        paths = build_capture_paths(OUTDIR, channel)
+        base_dir = OUTDIR / run_id if run_id else OUTDIR
+        paths = build_capture_paths(base_dir, channel)
         meta["csv_file"] = paths["csv"].name
-        meta["png_file"] = paths["png"].name
         save_csv(paths["csv"], time_s, volts)
-        save_plot(paths["png"], time_s, volts, meta)
         save_json(paths["json"], meta)
 
     return {
@@ -165,6 +170,11 @@ async def websocket_stream(ws: WebSocket) -> None:
                 "voltage": volts.tolist(),
                 "meta": meta,
             }
+            # During streaming, append peaks for histogram if baseline is set.
+            if baseline_value is not None:
+                diff = np.abs(volts - baseline_value)
+                peak = float(np.max(diff))
+                histogram_values.append(peak)
             await ws.send_json(payload)
             await asyncio.sleep(1.0)
     except WebSocketDisconnect:
@@ -224,52 +234,165 @@ async def analysis_histogram(bins: int = 20) -> Dict[str, Any]:
     }
 
 
-async def _logging_worker(interval_s: float, run_id: str) -> None:
+@app.post("/analysis/clear")
+async def analysis_clear() -> Dict[str, Any]:
+    histogram_values.clear()
+    return {"status": "cleared", "count": 0}
+
+
+def _acquire_waveform_sync() -> tuple:
+    """Blocking acquire (setup + waveform + meta). Run in thread pool."""
+    driver.setup_waveform_transfer()
+    time_s, volts, raw = driver.acquire_waveform()
+    meta = driver.get_basic_metadata()
+    return time_s, volts, raw, meta
+
+
+async def _trigger_capture_worker(run_id: str) -> None:
+    """
+    Trigger-driven capture loop.
+
+    Runs blocking scope I/O in a thread pool so that task.cancel() and
+    stop_requested can take effect between captures.
+    Automatically appends peak (vs baseline) to histogram when baseline is set.
+    """
+    global trigger_capture_saved_count, trigger_capture_last_saved_at
+    global baseline_value, histogram_values
     base_dir = OUTDIR / run_id
     base_dir.mkdir(parents=True, exist_ok=True)
-    while True:
-        async with driver_lock:
-            driver.setup_waveform_transfer()
-            time_s, volts, raw = driver.acquire_waveform()
-            meta = driver.get_basic_metadata()
-        meta["n_points"] = int(len(raw))
-        meta["timestamp_local"] = datetime.now().isoformat(timespec="seconds")
-        paths = build_capture_paths(base_dir, driver.config.channel)
-        meta["csv_file"] = paths["csv"].name
-        meta["png_file"] = paths["png"].name
-        save_csv(paths["csv"], time_s, volts)
-        save_plot(paths["png"], time_s, volts, meta)
-        save_json(paths["json"], meta)
-        await asyncio.sleep(interval_s)
+    trigger_capture_saved_count = 0
+    trigger_capture_last_saved_at = None
+    loop = asyncio.get_event_loop()
+    try:
+        while True:
+            if trigger_capture_stop_requested:
+                break
+            time_s, volts, raw, meta = await loop.run_in_executor(
+                None, _acquire_waveform_sync
+            )
+            if trigger_capture_stop_requested:
+                break
+            meta["n_points"] = int(len(raw))
+            meta["timestamp_local"] = datetime.now().isoformat(timespec="seconds")
+            paths = build_capture_paths(base_dir, driver.config.channel)
+            meta["csv_file"] = paths["csv"].name
+            save_csv(paths["csv"], time_s, volts)
+            save_json(paths["json"], meta)
+            trigger_capture_saved_count += 1
+            trigger_capture_last_saved_at = datetime.now()
+            if baseline_value is not None:
+                diff = np.abs(volts - baseline_value)
+                peak = float(np.max(diff))
+                histogram_values.append(peak)
+    except asyncio.CancelledError:
+        return
 
 
-@app.post("/logging/start")
-async def start_logging(payload: Dict[str, Any]) -> Dict[str, Any]:
-    global logging_task, logging_active_run
-    if logging_task is not None and not logging_task.done():
+@app.post("/trigger_capture/start")
+async def start_trigger_capture(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Start background trigger-driven capture loop.
+    """
+    global trigger_capture_task
+    global trigger_capture_active_run
+    global trigger_capture_saved_count
+    global trigger_capture_started_at
+    global trigger_capture_last_saved_at
+    global trigger_capture_stop_requested
+    if trigger_capture_task is not None and not trigger_capture_task.done():
         return JSONResponse(
             status_code=400,
-            content={"detail": "logging already running"},
+            content={"detail": "triggered capture already running"},
         )
     run_id = str(payload.get("run_id") or datetime.now().strftime("run_%Y%m%d_%H%M%S"))
-    interval_s = float(payload.get("interval_s", 5.0))
-    logging_active_run = run_id
-    logging_task = asyncio.create_task(_logging_worker(interval_s, run_id))
-    return {"run_id": run_id, "interval_s": interval_s}
+    trigger_capture_stop_requested = False
+    trigger_capture_started_at = datetime.now()
+    trigger_capture_last_saved_at = None
+    trigger_capture_saved_count = 0
+    trigger_capture_task = asyncio.create_task(_trigger_capture_worker(run_id))
+    trigger_capture_active_run = run_id
+    return {
+        "status": "started",
+        "run_id": run_id,
+        "saved_count": trigger_capture_saved_count,
+        "histogram_count": len(histogram_values),
+    }
 
 
-@app.post("/logging/stop")
-async def stop_logging() -> Dict[str, Any]:
-    global logging_task, logging_active_run
-    if logging_task is None or logging_task.done():
-        return {"stopped": False}
-    logging_task.cancel()
+@app.post("/trigger_capture/stop")
+async def stop_trigger_capture() -> Dict[str, Any]:
+    """
+    Stop background trigger-driven capture loop.
+    Sets stop_requested so the worker exits after the current capture (or immediately
+    if it is between captures). Also cancels the task so we don't wait forever.
+    """
+    global trigger_capture_task, trigger_capture_active_run, trigger_capture_saved_count
+    global trigger_capture_stop_requested
+    if trigger_capture_task is None:
+        trigger_capture_stop_requested = False
+        return {
+            "status": "stopped",
+            "run_id": trigger_capture_active_run,
+            "saved_count": trigger_capture_saved_count,
+            "histogram_count": len(histogram_values),
+        }
+    if trigger_capture_task.done():
+        run_id = trigger_capture_active_run
+        trigger_capture_task = None
+        trigger_capture_active_run = None
+        trigger_capture_stop_requested = False
+        return {
+            "status": "stopped",
+            "run_id": run_id,
+            "saved_count": trigger_capture_saved_count,
+            "histogram_count": len(histogram_values),
+        }
+    trigger_capture_stop_requested = True
+    trigger_capture_task.cancel()
     try:
-        await logging_task
-    except Exception:
+        await trigger_capture_task
+    except asyncio.CancelledError:
         pass
-    logging_task = None
-    run_id = logging_active_run
-    logging_active_run = None
-    return {"stopped": True, "run_id": run_id}
+    run_id = trigger_capture_active_run
+    trigger_capture_task = None
+    trigger_capture_active_run = None
+    trigger_capture_stop_requested = False
+    return {
+        "status": "stopped",
+        "run_id": run_id,
+        "saved_count": trigger_capture_saved_count,
+        "histogram_count": len(histogram_values),
+    }
+
+
+@app.get("/trigger_capture/status")
+async def trigger_capture_status() -> Dict[str, Any]:
+    # Compute basic stats for monitoring.
+    active = trigger_capture_task is not None and not trigger_capture_task.done()
+    started_iso = (
+        trigger_capture_started_at.isoformat(timespec="seconds")
+        if trigger_capture_started_at
+        else None
+    )
+    last_saved_iso = (
+        trigger_capture_last_saved_at.isoformat(timespec="seconds")
+        if trigger_capture_last_saved_at
+        else None
+    )
+    duration_s: Optional[float] = None
+    rate_per_min: Optional[float] = None
+    if trigger_capture_started_at:
+        duration_s = (datetime.now() - trigger_capture_started_at).total_seconds()
+        if duration_s > 0 and trigger_capture_saved_count > 0:
+            rate_per_min = trigger_capture_saved_count / (duration_s / 60.0)
+    return {
+        "active": active,
+        "run_id": trigger_capture_active_run,
+        "saved_count": trigger_capture_saved_count,
+        "histogram_count": len(histogram_values),
+        "started_at": started_iso,
+        "last_saved_at": last_saved_iso,
+        "duration_s": duration_s,
+        "rate_per_min": rate_per_min,
+    }
 
