@@ -209,6 +209,18 @@
       #capturesList {
         font-size: 14px;
       }
+      #storageInfo {
+        margin-right: 12px;
+        font-size: 13px;
+        color: #aaa;
+        cursor: pointer;
+        padding: 4px 8px;
+        border-radius: 4px;
+        transition: background 0.2s;
+      }
+      #storageInfo:hover {
+        background: rgba(255, 255, 255, 0.1);
+      }
       #activityBadge {
         margin-right: 12px;
         font-size: 13px;
@@ -256,6 +268,7 @@
   <body>
     <header>
       <div style="display: flex; align-items: center; margin-left: auto;">
+        <div id="storageInfo" title="Click to refresh storage info">💾 —</div>
         <div id="activityBadge"></div>
         <div id="status">status: -</div>
       </div>
@@ -607,6 +620,33 @@
           { responsive: true }
         );
       }
+
+      function formatBytes(bytes) {
+        if (bytes === 0) return "0 B";
+        const k = 1024;
+        const sizes = ["B", "KB", "MB", "GB", "TB"];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return (bytes / Math.pow(k, i)).toFixed(2) + " " + sizes[i];
+      }
+
+      async function updateStorageInfo() {
+        try {
+          const res = await fetch("/storage");
+          const data = await res.json();
+          const freePercent = ((data.free / data.total) * 100).toFixed(1);
+          const outputSize = formatBytes(data.output_size);
+          const freeSize = formatBytes(data.free);
+          document.getElementById("storageInfo").textContent = 
+            `💾 Free: ${freeSize} (${freePercent}%) | Output: ${outputSize}`;
+          document.getElementById("storageInfo").title = 
+            `Output dir: ${data.output_dir}\nClick to refresh`;
+        } catch (e) {
+          document.getElementById("storageInfo").textContent = "💾 Error";
+        }
+      }
+
+      document.getElementById("storageInfo").onclick = updateStorageInfo;
+      updateStorageInfo();
 
       document.getElementById("btnHealth").onclick = async () => {
         try {

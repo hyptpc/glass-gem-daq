@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -92,6 +93,33 @@ async def info() -> Dict[str, Any]:
         meta = driver.get_basic_metadata()
         trig = driver.get_trigger_state()
     return {"meta": meta, "trigger": trig}
+
+
+@app.get("/storage")
+async def storage_info() -> Dict[str, Any]:
+    try:
+        # Get disk usage for the output directory
+        stat = shutil.disk_usage(OUTDIR.parent if OUTDIR.exists() else Path.cwd())
+        
+        # Calculate output directory size
+        output_size = 0
+        if OUTDIR.exists():
+            for item in OUTDIR.rglob("*"):
+                if item.is_file():
+                    output_size += item.stat().st_size
+        
+        return {
+            "total": stat.total,
+            "used": stat.used,
+            "free": stat.free,
+            "output_size": output_size,
+            "output_dir": str(OUTDIR),
+        }
+    except Exception as exc:
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(exc)},
+        )
 
 
 @app.get("/camera/config")
