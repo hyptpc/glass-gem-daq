@@ -29,18 +29,18 @@
       }
       main {
         width: 100%;
-        min-height: calc(100vh - 36px);
+        height: calc(100vh - 36px);
         margin: 0;
         display: flex;
         gap: 8px;
-        padding: 0 8px;
+        padding: 8px;
         box-sizing: border-box;
       }
       .main-left {
         flex: 3;
         display: flex;
         flex-direction: column;
-        min-height: 520px;
+        min-height: 0;
       }
       .main-right {
         flex: 2;
@@ -111,10 +111,31 @@
         min-height: 60px;
         background: #000;
       }
+      .camera-hist-row {
+        display: flex;
+        gap: 8px;
+        margin-top: 8px;
+        min-height: 0;
+        flex: 1;
+      }
+      .camera-section {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .camera-section img {
+        flex: 1;
+        width: 100%;
+        object-fit: contain;
+        display: block;
+        min-height: 0;
+      }
       .hist-section {
         display: flex;
         flex-direction: column;
-        margin-top: 8px;
+        flex: 1;
+        min-width: 0;
         border-radius: 6px;
         overflow: hidden;
       }
@@ -137,8 +158,8 @@
         font-size: 13px;
       }
       #histPlot {
-        min-height: 180px;
         flex: 1;
+        min-height: 0;
       }
       .controls label {
         display: block;
@@ -241,7 +262,7 @@
     </header>
     <main>
       <div class="main-left">
-        <section style="flex: 2; display: flex; flex-direction: column; min-height: 0;">
+        <section style="flex: 1.5; display: flex; flex-direction: column; min-height: 0;">
           <div style="display: flex; justify-content: space-between; align-items: center;">
             <h3>Waveform</h3>
             <div id="freqDisplay" style="font-size: 14px; color: #81c784;">— Hz</div>
@@ -277,13 +298,19 @@
             </div>
           </div>
         </section>
-        <section class="hist-section" style="flex: 1;">
-          <div class="hist-header">
-            <h3 style="margin: 0;">Histogram</h3>
-            <div id="histCount" class="hist-count">—</div>
-          </div>
-          <div id="histPlot"></div>
-        </section>
+        <div class="camera-hist-row">
+          <section id="cameraSection" class="camera-section" style="display: none;">
+            <h3>Camera</h3>
+            <img id="cameraImg" src="/camera/stream" alt="Camera" />
+          </section>
+          <section class="hist-section">
+            <div class="hist-header">
+              <h3 style="margin: 0;">Histogram</h3>
+              <div id="histCount" class="hist-count">—</div>
+            </div>
+            <div id="histPlot"></div>
+          </section>
+        </div>
       </div>
       <div class="main-right">
         <section class="controls">
@@ -974,6 +1001,17 @@
           document.getElementById("inpBaseline").value = baselineValue;
         }
       }).catch(() => {});
+
+      fetch("/camera/config")
+        .then((r) => r.json())
+        .then((d) => {
+          const el = document.getElementById("cameraSection");
+          if (el) el.style.display = d.enabled ? "block" : "none";
+        })
+        .catch(() => {
+          const el = document.getElementById("cameraSection");
+          if (el) el.style.display = "none";
+        });
 
       document.getElementById("btnStopTriggered").onclick = async () => {
         try {

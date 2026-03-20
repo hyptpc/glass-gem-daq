@@ -10,10 +10,13 @@ import asyncio
 
 import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+import httpx
+
 from app.config import (
+    CAMERA_STREAM_URL,
     DEFAULT_CHANNEL,
     OSC_IP,
     OUTDIR,
@@ -89,6 +92,38 @@ async def info() -> Dict[str, Any]:
         meta = driver.get_basic_metadata()
         trig = driver.get_trigger_state()
     return {"meta": meta, "trigger": trig}
+
+
+@app.get("/camera/config")
+async def camera_config() -> Dict[str, Any]:
+    return {"enabled": CAMERA_STREAM_URL is not None and len(CAMERA_STREAM_URL) > 0}
+
+
+@app.get("/camera/stream")
+async def camera_stream():
+    if not CAMERA_STREAM_URL:
+        return JSONResponse(status_code=503, content={"detail": "camera stream not configured"})
+
+    # mjpg-streamer returns 400 on HEAD, so we probe with GET to get Content-Type first
+    media_type = "multipart/x-mixed-replace; boundary=boundary"
+    async with httpx.AsyncClient(timeout=10.0) as probe_client:
+        try:
+            async with probe_client.stream("GET", CAMERA_STREAM_URL) as probe_response:
+                probe_response.raise_for_status()
+                ct = probe_response.headers.get("content-type")
+                if ct and "multipart" in ct.lower():
+                    media_type = ct
+        except Exception:
+            pass
+    
+    async def stream_chunks():
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            async with client.stream("GET", CAMERA_STREAM_URL) as response:
+                response.raise_for_status()
+                async for chunk in response.aiter_bytes():
+                    yield chunk
+
+    return StreamingResponse(stream_chunks(), media_type=media_type)
 
 
 @app.get("/trigger")

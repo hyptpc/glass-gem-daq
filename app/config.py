@@ -18,4 +18,5 @@ TIMEOUT_MS = int(os.environ.get("OSC_TIMEOUT_MS", "30000"))
 # Output directory for saved waveforms (default: outputs/)
 OUTDIR = Path(os.environ.get("OUTPUT_DIR", "outputs"))
 
-
+# Optional: MJPEG camera stream URL (e.g. Raspberry Pi mjpg-streamer). Unset = camera disabled.
+CAMERA_STREAM_URL = os.environ.get("CAMERA_STREAM_URL") or None

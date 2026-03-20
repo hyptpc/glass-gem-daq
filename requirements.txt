@@ -5,4 +5,5 @@ matplotlib
 pyvisa
 pyvisa-py
 requests
+httpx
 
