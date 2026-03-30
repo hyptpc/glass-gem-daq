@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from collections import defaultdict
 from datetime import datetime
@@ -10,7 +11,7 @@ from typing import Any, Dict, List, Optional
 import asyncio
 
 import numpy as np
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -18,12 +19,15 @@ import httpx
 
 from app.config import (
     CAMERA_STREAM_URL,
+    DATA_WINDOW_MODE,
     DEFAULT_CHANNEL,
     OSC_IP,
     OUTDIR,
     START_INDEX,
     STOP_INDEX,
     TIMEOUT_MS,
+    TRIGGER_CAPTURE_ACQUISITION_TIMEOUT_S,
+    TRIGGER_CAPTURE_STRICT_TRIGGER,
 )
 from app.scope import (
     ScopeConfig,
@@ -35,12 +39,31 @@ from app.scope import (
 
 ALL_CHANNELS = ["CH1", "CH2", "CH3", "CH4"]
 
+# Edge trigger source: analog channels + external (Tek SCPI names).
+TRIGGER_EDGE_SOURCES = ["CH1", "CH2", "CH3", "CH4", "EXT"]
+
+_RUN_DIR_RE = re.compile(r"^run(\d{4})$")
+
+
+def next_run_id_from_outdir() -> str:
+    best = 0
+    if OUTDIR.exists():
+        for p in OUTDIR.iterdir():
+            if not p.is_dir():
+                continue
+            m = _RUN_DIR_RE.match(p.name)
+            if m:
+                best = max(best, int(m.group(1)))
+    return f"run{best + 1:04d}"
+
+
 scope_config = ScopeConfig(
     ip=OSC_IP,
     channel=DEFAULT_CHANNEL,
     start_index=START_INDEX,
     stop_index=STOP_INDEX,
     timeout_ms=TIMEOUT_MS,
+    data_window_mode=DATA_WINDOW_MODE,
 )
 
 driver = ScopeDriver(scope_config)
@@ -93,6 +116,170 @@ async def info() -> Dict[str, Any]:
         meta = driver.get_basic_metadata()
         trig = driver.get_trigger_state()
     return {"meta": meta, "trigger": trig}
+
+
+@app.get("/scope/display")
+async def scope_display() -> Dict[str, Any]:
+    """Current oscilloscope horizontal scale and per-channel vertical scale/position (SCPI)."""
+    async with driver_lock:
+        return driver.get_scope_display_state()
+
+
+@app.post("/scope/horizontal")
+async def scope_set_horizontal(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Set ``HORIZONTAL:SCALE`` (seconds per division)."""
+    try:
+        scale = float(payload["scale_s_per_div"])
+    except (KeyError, TypeError, ValueError):
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "body must include numeric scale_s_per_div"},
+        )
+    if scale <= 0:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "scale_s_per_div must be positive"},
+        )
+    try:
+        async with driver_lock:
+            prev_acquire_state = None
+            acquire_state = None
+            driver.set_horizontal_scale_s(scale)
+            trigger_left_fraction = payload.get("trigger_left_fraction", None)
+            if trigger_left_fraction is not None:
+                # Some scopes ignore horizontal position changes while running.
+                # Temporarily STOP and restore the previous state.
+                try:
+                    prev_acquire_state = driver.get_acquire_state()
+                    acquire_state = prev_acquire_state
+                except Exception:
+                    prev_acquire_state = None
+                    acquire_state = None
+                if acquire_state in ("RUN", "RUNNING", "RUNSTOP"):
+                    try:
+                        driver.set_acquire_state("STOP")
+                    except Exception:
+                        pass
+                    # Match debug.py: configure Stop-A behavior before changing HOR controls.
+                    try:
+                        driver.set_stopa_runstop()
+                    except Exception:
+                        pass
+                driver.set_trigger_left_fraction(
+                    left_fraction=float(trigger_left_fraction),
+                    scale_s_per_div=scale,
+                )
+                if prev_acquire_state in ("RUN", "RUNNING", "RUNSTOP"):
+                    try:
+                        driver.set_acquire_state("RUN")
+                    except Exception:
+                        pass
+            h = driver.get_horizontal_scale_s()
+            # Optional read-back for debugging / UI verification.
+            horizontal_delay_s = None
+            horizontal_position_s = None
+            horizontal_hor_pos_percent = None
+            horizontal_hor_del_mod = None
+            try:
+                horizontal_delay_s = driver.get_horizontal_delay_s()
+            except Exception:
+                pass
+            try:
+                horizontal_position_s = driver.get_horizontal_position_s()
+            except Exception:
+                pass
+            try:
+                # Tek front-panel style shorthand; may not be supported by all models.
+                horizontal_hor_pos_percent = float(driver.scope.query("HOR:POS?").strip())  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            try:
+                horizontal_hor_del_mod = driver.scope.query("HOR:DEL:MOD?").strip()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+        resp: Dict[str, Any] = {"ok": True, "horizontal_scale_s_per_div": h}
+        if trigger_left_fraction is not None:
+            resp["trigger_left_fraction"] = trigger_left_fraction
+            resp["acquire_state"] = acquire_state
+            if horizontal_delay_s is not None:
+                resp["horizontal_delay_s"] = horizontal_delay_s
+            if horizontal_position_s is not None:
+                resp["horizontal_position_s"] = horizontal_position_s
+            if horizontal_hor_pos_percent is not None:
+                resp["horizontal_hor_pos_percent"] = horizontal_hor_pos_percent
+            if horizontal_hor_del_mod is not None:
+                resp["horizontal_hor_del_mod"] = horizontal_hor_del_mod
+        return resp
+    except Exception as exc:
+        return JSONResponse(
+            status_code=500,
+            content={"detail": str(exc)},
+        )
+
+
+@app.post("/scope/channel/{channel}/vertical")
+async def scope_set_channel_vertical(channel: str, payload: Dict[str, Any]) -> Any:
+    """Set ``CHx:SCALE`` (V/div) and/or ``CHx:POSITION`` (divisions)."""
+    ch = channel.strip().upper()
+    if ch not in ALL_CHANNELS:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": f"invalid channel {channel!r}; use CH1–CH4"},
+        )
+    scale = payload.get("scale_v_per_div")
+    pos = payload.get("position_div")
+    kw: Dict[str, float] = {}
+    if scale is not None:
+        try:
+            kw["scale_v_per_div"] = float(scale)
+        except (TypeError, ValueError):
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "scale_v_per_div must be a number"},
+            )
+        if kw["scale_v_per_div"] <= 0:
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "scale_v_per_div must be positive"},
+            )
+    if pos is not None:
+        try:
+            kw["position_div"] = float(pos)
+        except (TypeError, ValueError):
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "position_div must be a number"},
+            )
+    if not kw:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "provide scale_v_per_div and/or position_div"},
+        )
+    try:
+        async with driver_lock:
+            driver.set_channel_vertical(ch, **kw)
+            state = driver.get_channel_vertical(ch)
+        return {"ok": True, "channel": ch, **state}
+    except Exception as exc:
+        return JSONResponse(
+            status_code=500,
+            content={"detail": str(exc)},
+        )
+
+
+@app.get("/scope/wfmoutpre")
+async def get_scope_wfmoutpre() -> Dict[str, Any]:
+    """
+    Raw ``WFMOUTPRE?`` response (comma-separated fields for the last ``CURVE?`` transfer).
+
+    Equivalent to: ``preamble = scope.query("WFMOUTPRE?")``
+    """
+    async with driver_lock:
+        raw = driver.query_wfmoutpre_preamble()
+    return {
+        "wfmoutpre": raw,
+        "note": "Tek WFMOUTPRE comma-separated preamble; reflects the last CURVE? transfer.",
+    }
 
 
 @app.get("/storage")
@@ -163,7 +350,15 @@ async def get_trigger() -> Dict[str, Any]:
 
 @app.post("/trigger/source")
 async def set_trigger_source(payload: Dict[str, Any]) -> Dict[str, Any]:
-    source = str(payload.get("source", "CH1"))
+    source = str(payload.get("source", "CH1")).strip()
+    if source not in TRIGGER_EDGE_SOURCES:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "detail": f"invalid trigger source: {source!r}; "
+                f"allowed: {', '.join(TRIGGER_EDGE_SOURCES)}",
+            },
+        )
     async with driver_lock:
         driver.set_trigger_source(source)
         state = driver.get_trigger_state()
@@ -196,6 +391,14 @@ def _normalize_channels(channels: Any) -> List[str]:
 
 @app.post("/api/capture_once")
 async def capture_once(payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Single acquisition (optionally saved under ``run_id``).
+
+    **Acquisition discipline:** For a given measurement run (same ``run_id`` or a continuous
+    ``trigger_capture`` session), keep oscilloscope conditions fixed—timebase, record length,
+    trigger, input coupling/bandwidth, etc. Do not change the instrument mid-run; otherwise
+    saved traces are not comparable.
+    """
     save = False
     channels = [DEFAULT_CHANNEL]
     run_id: Optional[str] = None
@@ -215,12 +418,13 @@ async def capture_once(payload: Optional[Dict[str, Any]] = None) -> Dict[str, An
     time_s = None
     voltage_dict: Dict[str, List[float]] = {}
     for ch in channels:
-        t_s, volts, raw = multi[ch]
+        t_s, volts, raw, wfm = multi[ch]
         if time_s is None:
             time_s = t_s
         meta = metas[ch]
         meta["n_points"] = int(len(raw))
         meta["timestamp_local"] = datetime.now().isoformat(timespec="seconds")
+        meta["wfmoutpre"] = dict(wfm)
         metas[ch] = meta
         voltage_dict[ch] = volts.tolist()
 
@@ -264,11 +468,12 @@ async def websocket_stream(ws: WebSocket) -> None:
             time_s = None
             voltage_dict: Dict[str, List[float]] = {}
             for ch in channels:
-                t_s, volts, raw = multi[ch]
+                t_s, volts, raw, wfm = multi[ch]
                 if time_s is None:
                     time_s = t_s
                 meta = metas[ch]
                 meta["n_points"] = int(len(raw))
+                meta["wfmoutpre"] = dict(wfm)
                 metas[ch] = meta
                 voltage_dict[ch] = volts.tolist()
                 if baseline_common is not None:
@@ -317,8 +522,9 @@ async def analysis_append(payload: Optional[Dict[str, Any]] = None) -> Dict[str,
     bl = baseline_common
     async with driver_lock:
         driver.setup_waveform_transfer(channel=channel)
-        time_s, volts, raw = driver.acquire_waveform()
+        time_s, volts, raw, wfm = driver.acquire_waveform()
         meta = driver.get_basic_metadata(channel=channel)
+        meta["wfmoutpre"] = dict(wfm)
     diff = np.abs(volts - bl)
     peak = float(np.max(diff))
     histogram_values[channel].append(peak)
@@ -332,13 +538,31 @@ async def analysis_append(payload: Optional[Dict[str, Any]] = None) -> Dict[str,
 
 
 @app.get("/analysis/histogram")
-async def analysis_histogram(channel: str = DEFAULT_CHANNEL, bins: int = 20) -> Dict[str, Any]:
+async def analysis_histogram(
+    channel: str = DEFAULT_CHANNEL,
+    bins: int = Query(20, ge=1),
+    range_min: Optional[float] = Query(None),
+    range_max: Optional[float] = Query(None),
+) -> Dict[str, Any]:
     if channel not in ALL_CHANNELS:
         channel = DEFAULT_CHANNEL
     values = histogram_values.get(channel, [])
     if not values:
         return {"bins": [], "counts": [], "count": 0, "channel": channel}
-    counts, edges = np.histogram(values, bins=bins)
+    if (range_min is None) ^ (range_max is None):
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "range_min and range_max must both be set or both omitted"},
+        )
+    hist_range: Optional[tuple[float, float]] = None
+    if range_min is not None and range_max is not None:
+        if range_min >= range_max:
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "range_min must be less than range_max"},
+            )
+        hist_range = (range_min, range_max)
+    counts, edges = np.histogram(values, bins=bins, range=hist_range)
     return {
         "bins": edges.tolist(),
         "counts": counts.tolist(),
@@ -375,8 +599,9 @@ def _save_one_channel_sync(
 def _acquire_waveform_sync() -> tuple:
     """Blocking single-channel acquire. Run in thread pool."""
     driver.setup_waveform_transfer()
-    time_s, volts, raw = driver.acquire_waveform()
+    time_s, volts, raw, wfm = driver.acquire_waveform()
     meta = driver.get_basic_metadata()
+    meta["wfmoutpre"] = dict(wfm)
     return time_s, volts, raw, meta
 
 
@@ -387,12 +612,33 @@ def _acquire_waveform_multi_sync(channels: List[str]) -> tuple:
     return multi, metas
 
 
+def _acquire_waveform_multi_sync_after_trigger(channels: List[str]) -> tuple:
+    """
+    One completed acquisition per save: ARM + wait for trigger/record, then CURVE per channel.
+    """
+    multi = driver.acquire_waveform_multi_after_trigger(
+        channels,
+        acquisition_timeout_s=TRIGGER_CAPTURE_ACQUISITION_TIMEOUT_S,
+    )
+    metas = {ch: driver.get_basic_metadata(ch) for ch in channels}
+    return multi, metas
+
+
 async def _trigger_capture_worker(run_id: str, channels: List[str]) -> None:
     """
     Trigger-driven capture loop (multi-channel).
 
     Runs blocking scope I/O in a thread pool. Saves each channel to CSV/meta.
     Appends peak to histogram per channel when baseline is set for that channel.
+
+    **Acquisition discipline:** Until this loop is stopped, do not change oscilloscope
+    settings (horizontal scale, record length, trigger, channel setup, etc.). One ``run_id``
+    should mean one fixed acquisition profile.
+
+    When ``TRIGGER_CAPTURE_STRICT_TRIGGER`` is true, each save follows a completed
+    acquisition (``ACQUIRE:STOPAFTER SEQUENCE``, ``ACQUIRE:STATE RUN``, wait, then ``CURVE?``).
+    When false (default), the current waveform buffer is read every iteration so files are
+    saved reliably; duplicates are possible if the scope has not retriggered yet.
     """
     global trigger_capture_saved_count, trigger_capture_last_saved_at
     global baseline_common, histogram_values
@@ -401,19 +647,40 @@ async def _trigger_capture_worker(run_id: str, channels: List[str]) -> None:
     trigger_capture_saved_count = 0
     trigger_capture_last_saved_at = None
     loop = asyncio.get_event_loop()
+    session_started = False
     try:
+        if TRIGGER_CAPTURE_STRICT_TRIGGER:
+            await loop.run_in_executor(None, driver.begin_triggered_capture_session)
+            session_started = True
         while True:
             if trigger_capture_stop_requested:
                 break
-            multi, metas = await loop.run_in_executor(
-                None, lambda: _acquire_waveform_multi_sync(channels)
-            )
+            try:
+                if TRIGGER_CAPTURE_STRICT_TRIGGER:
+                    multi, metas = await loop.run_in_executor(
+                        None,
+                        _acquire_waveform_multi_sync_after_trigger,
+                        channels,
+                    )
+                else:
+                    multi, metas = await loop.run_in_executor(
+                        None,
+                        _acquire_waveform_multi_sync,
+                        channels,
+                    )
+            except TimeoutError:
+                if not TRIGGER_CAPTURE_STRICT_TRIGGER:
+                    raise
+                if trigger_capture_stop_requested:
+                    break
+                continue
             if trigger_capture_stop_requested:
                 break
             save_tasks = []
             for ch in channels:
-                time_s, volts, raw = multi[ch]
+                time_s, volts, raw, wfm = multi[ch]
                 meta = metas[ch].copy()
+                meta["wfmoutpre"] = dict(wfm)
                 meta["n_points"] = int(len(raw))
                 meta["timestamp_local"] = datetime.now().isoformat(timespec="seconds")
                 paths = build_capture_paths(base_dir, ch)
@@ -435,6 +702,9 @@ async def _trigger_capture_worker(run_id: str, channels: List[str]) -> None:
             trigger_capture_last_saved_at = datetime.now()
     except asyncio.CancelledError:
         return
+    finally:
+        if session_started:
+            await loop.run_in_executor(None, driver.end_triggered_capture_session)
 
 
 def _histogram_count_dict() -> Dict[str, int]:
@@ -445,6 +715,10 @@ def _histogram_count_dict() -> Dict[str, int]:
 async def start_trigger_capture(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     Start background trigger-driven capture loop.
+
+    Operators should treat the returned ``run_id`` as a single experiment: keep scope
+    acquisition parameters unchanged until ``/trigger_capture/stop`` (see module notes on
+    ``capture_once`` / ``_trigger_capture_worker``).
     """
     global trigger_capture_task
     global trigger_capture_active_run
@@ -458,7 +732,7 @@ async def start_trigger_capture(payload: Dict[str, Any]) -> Dict[str, Any]:
             status_code=400,
             content={"detail": "triggered capture already running"},
         )
-    run_id = str(payload.get("run_id") or datetime.now().strftime("run_%Y%m%d_%H%M%S"))
+    run_id = next_run_id_from_outdir()
     channels = _normalize_channels(payload.get("channels", [DEFAULT_CHANNEL]))
     trigger_capture_stop_requested = False
     trigger_capture_started_at = datetime.now()

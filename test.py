@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import pyvisa
 import requests
 
+from app.config import DATA_WINDOW_MODE
 from app.scope.driver import (
     ScopeConfig,
     ScopeDriver,
@@ -59,6 +60,7 @@ OSC_CONFIG = ScopeConfig(
     start_index=START_INDEX,
     stop_index=STOP_INDEX,
     timeout_ms=TIMEOUT_MS,
+    data_window_mode=DATA_WINDOW_MODE,
 )
 
 
@@ -111,10 +113,11 @@ def main():
         driver.setup_waveform_transfer()
 
         print("Reading waveform...")
-        time_s, volts, raw = driver.acquire_waveform()
+        time_s, volts, raw, wfm = driver.acquire_waveform()
 
         print("Reading metadata...")
         meta = driver.get_basic_metadata()
+        meta["wfmoutpre"] = dict(wfm)
         meta["n_points"] = int(len(raw))
         meta["timestamp_local"] = datetime.now().isoformat(timespec="seconds")
         meta["csv_file"] = paths["csv"].name

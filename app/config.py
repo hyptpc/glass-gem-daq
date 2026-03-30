@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import os
+from typing import Literal
 
 
 # Required: oscilloscope IP address
@@ -13,7 +14,22 @@ if not OSC_IP:
 DEFAULT_CHANNEL = os.environ.get("OSC_CHANNEL", "CH1")
 START_INDEX = int(os.environ.get("OSC_START_INDEX", "1"))
 STOP_INDEX = int(os.environ.get("OSC_STOP_INDEX", "10000"))
+# fixed: DATA:START/STOP from OSC_* only. record: DATA:START=1, DATA:STOP=HORIZONTAL:RECORDLENGTH?
+_dw = os.environ.get("OSC_DATA_WINDOW", "record").strip().lower()
+DATA_WINDOW_MODE: Literal["fixed", "record"] = (
+    _dw if _dw in ("fixed", "record") else "record"
+)
 TIMEOUT_MS = int(os.environ.get("OSC_TIMEOUT_MS", "30000"))
+# Trigger-driven capture: max seconds to wait for one acquisition (trigger + record) per save.
+TRIGGER_CAPTURE_ACQUISITION_TIMEOUT_S = float(
+    os.environ.get("OSC_TRIGGER_CAPTURE_TIMEOUT_S", "30")
+)
+# Default false: prefer saving every loop over avoiding duplicate buffers (same capture may
+# repeat if the scope has not retriggered yet). Set true only if you need SEQUENCE+wait and
+# your instrument reports acquisition completion reliably (OSC_TRIGGER_CAPTURE_STRICT=1).
+TRIGGER_CAPTURE_STRICT_TRIGGER = (
+    os.environ.get("OSC_TRIGGER_CAPTURE_STRICT", "0").lower() in ("1", "true", "yes")
+)
 
 # Output directory for saved waveforms (default: outputs/)
 OUTDIR = Path(os.environ.get("OUTPUT_DIR", "outputs"))

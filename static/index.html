@@ -266,6 +266,17 @@
         background: #81c784;
         animation: pulse 1.2s ease-in-out infinite;
       }
+      #runIdDisplay {
+        margin-right: 16px;
+        font-size: 14px;
+        font-family: ui-monospace, "Cascadia Code", monospace;
+        color: #90a4ae;
+        min-width: 10em;
+      }
+      #runIdDisplay.recording {
+        color: #e0f2f1;
+        font-weight: 600;
+      }
       @keyframes pulse {
         0%, 100% { opacity: 1; }
         50% { opacity: 0.4; }
@@ -286,6 +297,12 @@
   <body>
     <header>
       <div style="display: flex; align-items: center; margin-left: auto;">
+        <div
+          id="runIdDisplay"
+          title="Triggered capture saves under outputs/&lt;run_id&gt;/"
+        >
+          Run: —
+        </div>
         <div id="storageInfo" title="Click to refresh storage info">💾 —</div>
         <div id="activityBadge"></div>
         <div id="status">status: -</div>
@@ -356,21 +373,101 @@
             <button id="btnHealth">Health</button>
           </div>
           <hr />
-          <div>
-            <h4>Run</h4>
-            <label>
-              Run ID
-              <input
-                id="inpRunId"
-                type="text"
-                placeholder="run_20260316_test1"
-              />
-            </label>
-          </div>
-          <hr />
           <div id="streamBlock">
             <h4>Stream</h4>
             <button id="btnStreamToggle">Start Stream</button>
+          </div>
+          <hr />
+          <div id="scopeBlock">
+            <button
+              type="button"
+              id="btnScopeAccordion"
+              style="width: 100%; text-align: left; background: #1a1a1a; border: 1px solid #333; color: #e0e0e0; border-radius: 4px; padding: 6px 8px; cursor: pointer;"
+            >
+              <span id="scopeAccordionArrow" style="display: inline-block; width: 18px;">[-]</span>
+              Scope (instrument)
+            </button>
+            <div id="scopeBlockContent" style="margin-top: 8px;">
+              <p style="font-size: 12px; color: #888; margin: 0 0 8px;">
+                SCPI: timebase and per-channel vertical scale / position on the oscilloscope.
+              </p>
+              <div style="margin-bottom: 8px; display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end;">
+                <label style="font-size: 12px;">
+                  Timebase (/div)
+                  <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 4px;">
+                    <input id="inpScopeHScaleVal" type="number" step="any" style="width: 120px;" />
+                    <select id="selScopeHScaleUnit" style="width: 160px;">
+                      <option value="ns">ns (1e-9)</option>
+                      <option value="us" selected>us (1e-6)</option>
+                      <option value="ms">ms (1e-3)</option>
+                      <option value="s">s (1)</option>
+                    </select>
+                  </div>
+                </label>
+                <button type="button" id="btnScopeHApply">Apply</button>
+              </div>
+              <div
+                style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; align-items: flex-start;"
+              >
+              <div
+                style="border: 1px solid #333; border-radius: 4px; padding: 6px; min-width: 168px;"
+              >
+                <div style="font-weight: 600; color: #e8d63b;">CH1</div>
+                <label style="font-size: 12px; display: block; margin-top: 4px;"
+                  >V/div
+                  <input id="inpScopeCH1Scale" type="number" step="any" style="width: 88px" /></label>
+                <label style="font-size: 12px; display: block; margin-top: 4px;"
+                  >Pos (div)
+                  <input id="inpScopeCH1Pos" type="number" step="any" style="width: 72px" /></label>
+                <button type="button" class="btnScopeChApply" data-ch="CH1" style="margin-top: 6px">
+                  Apply
+                </button>
+              </div>
+              <div
+                style="border: 1px solid #333; border-radius: 4px; padding: 6px; min-width: 168px;"
+              >
+                <div style="font-weight: 600; color: #2ecfd9;">CH2</div>
+                <label style="font-size: 12px; display: block; margin-top: 4px;"
+                  >V/div
+                  <input id="inpScopeCH2Scale" type="number" step="any" style="width: 88px" /></label>
+                <label style="font-size: 12px; display: block; margin-top: 4px;"
+                  >Pos (div)
+                  <input id="inpScopeCH2Pos" type="number" step="any" style="width: 72px" /></label>
+                <button type="button" class="btnScopeChApply" data-ch="CH2" style="margin-top: 6px">
+                  Apply
+                </button>
+              </div>
+              <div
+                style="border: 1px solid #333; border-radius: 4px; padding: 6px; min-width: 168px;"
+              >
+                <div style="font-weight: 600; color: #d870e8;">CH3</div>
+                <label style="font-size: 12px; display: block; margin-top: 4px;"
+                  >V/div
+                  <input id="inpScopeCH3Scale" type="number" step="any" style="width: 88px" /></label>
+                <label style="font-size: 12px; display: block; margin-top: 4px;"
+                  >Pos (div)
+                  <input id="inpScopeCH3Pos" type="number" step="any" style="width: 72px" /></label>
+                <button type="button" class="btnScopeChApply" data-ch="CH3" style="margin-top: 6px">
+                  Apply
+                </button>
+              </div>
+              <div
+                style="border: 1px solid #333; border-radius: 4px; padding: 6px; min-width: 168px;"
+              >
+                <div style="font-weight: 600; color: #52c755;">CH4</div>
+                <label style="font-size: 12px; display: block; margin-top: 4px;"
+                  >V/div
+                  <input id="inpScopeCH4Scale" type="number" step="any" style="width: 88px" /></label>
+                <label style="font-size: 12px; display: block; margin-top: 4px;"
+                  >Pos (div)
+                  <input id="inpScopeCH4Pos" type="number" step="any" style="width: 72px" /></label>
+                <button type="button" class="btnScopeChApply" data-ch="CH4" style="margin-top: 6px">
+                  Apply
+                </button>
+              </div>
+              </div>
+              <button type="button" id="btnScopeRefresh">Read from scope</button>
+            </div>
           </div>
           <hr />
         <div>
@@ -380,8 +477,9 @@
             <select id="selTrigSource">
               <option>CH1</option>
               <option>CH2</option>
+              <option>CH3</option>
+              <option>CH4</option>
               <option>EXT</option>
-              <option>LINE</option>
             </select>
           </label>
           <label>
@@ -414,8 +512,18 @@
                 <label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" id="histDrawCH4" /> CH4</label>
               </div>
             </div>
+            <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px 12px;align-items:flex-end;">
+              <label style="font-size:13px;">Bins
+                <input id="inpHistBins" type="number" min="1" step="1" value="20" style="width:64px;margin-left:4px;" />
+              </label>
+              <label style="font-size:13px;">Min (mV)
+                <input id="inpHistMin" type="number" step="any" placeholder="auto" style="width:88px;margin-left:4px;" />
+              </label>
+              <label style="font-size:13px;">Max (mV)
+                <input id="inpHistMax" type="number" step="any" placeholder="auto" style="width:88px;margin-left:4px;" />
+              </label>
+            </div>
             <div style="margin-top:8px;">
-              <button id="btnReloadHist">Draw Histogram</button>
               <button id="btnClearHist">Clear Histogram</button>
             </div>
             <div style="margin-top:8px;font-size:13px;color:#aaa;">
@@ -429,6 +537,9 @@
                 style="width:90px; margin-left:8px;"
               />
             </div>
+            <p style="margin:8px 0 0;font-size:12px;color:#888;">
+              Histogram updates automatically while streaming or triggered capture; samples accumulate until Clear.
+            </p>
           </div>
           <hr />
           <div id="triggerCaptureBlock">
@@ -534,6 +645,33 @@
           const el = document.getElementById("histDraw" + ch);
           return el && el.checked;
         });
+      }
+
+      function buildHistogramUrl(ch) {
+        const binsEl = document.getElementById("inpHistBins");
+        let bins = parseInt(binsEl && binsEl.value ? binsEl.value : "20", 10);
+        if (Number.isNaN(bins) || bins < 1) bins = 20;
+        let u =
+          "/analysis/histogram?channel=" +
+          encodeURIComponent(ch) +
+          "&bins=" +
+          encodeURIComponent(String(bins));
+        const minEl = document.getElementById("inpHistMin");
+        const maxEl = document.getElementById("inpHistMax");
+        const minS = minEl && minEl.value != null ? String(minEl.value).trim() : "";
+        const maxS = maxEl && maxEl.value != null ? String(maxEl.value).trim() : "";
+        if (minS !== "" && maxS !== "") {
+          const minMv = parseFloat(minS);
+          const maxMv = parseFloat(maxS);
+          if (!Number.isNaN(minMv) && !Number.isNaN(maxMv)) {
+            u +=
+              "&range_min=" +
+              encodeURIComponent(String(minMv / 1000)) +
+              "&range_max=" +
+              encodeURIComponent(String(maxMv / 1000));
+          }
+        }
+        return u;
       }
 
       CHANNEL_IDS.forEach((ch) => {
@@ -649,28 +787,39 @@
         const traces = [];
         let totalSamples = 0;
         items.forEach(({ channel, bins, counts }) => {
-          const hasData = bins && bins.length >= 2 && counts && counts.length > 0;
-          if (hasData) {
-            totalSamples += counts.reduce((a, b) => a + b, 0);
-          }
-          const samplesMv = [];
+          const hasData =
+            bins &&
+            bins.length >= 2 &&
+            counts &&
+            counts.length > 0 &&
+            bins.length === counts.length + 1;
+          if (hasData) totalSamples += counts.reduce((a, b) => a + b, 0);
+
+          // IMPORTANT: backend already computed bin edges via np.histogram(bins=..., range=...).
+          // To respect the user's `bins` setting, we must draw from those edges directly.
+          // (We do NOT re-bin by using Plotly's `type: "histogram"` with generated samples.)
+          let centersMv = [];
+          let barWidthMv = undefined;
           if (hasData) {
             for (let i = 0; i < counts.length; i++) {
               const left = bins[i];
               const right = bins[i + 1];
-              const centerMv = ((left + right) / 2) * 1000;
-              const n = counts[i];
-              for (let k = 0; k < n; k++) samplesMv.push(centerMv);
+              centersMv.push(((left + right) / 2) * 1000);
+              if (barWidthMv == null && right > left) {
+                barWidthMv = (right - left) * 1000;
+              }
             }
           }
           traces.push({
-            x: samplesMv,
-            type: "histogram",
+            x: centersMv,
+            y: hasData ? counts : [],
+            type: "bar",
             name: hasData ? channel : channel + " (no data)",
             marker: {
               color: "rgba(0,0,0,0)",
               line: { color: CHANNEL_COLORS[channel] || "#888", width: 1.2 },
             },
+            width: barWidthMv,
           });
         });
         if (countEl) countEl.textContent = totalSamples > 0 ? totalSamples + " samples" : "—";
@@ -681,6 +830,7 @@
             ...plotLayoutDark,
             showlegend: true,
             legend: { x: 1.02, y: 1 },
+            barmode: "overlay",
             xaxis: { ...plotLayoutDark.xaxis, title: "Peak diff [mV]" },
             yaxis: { ...plotLayoutDark.yaxis, title: "Count" },
           },
@@ -724,6 +874,180 @@
           setStatus("error " + e);
         }
       };
+
+      function getScopeHScaleUnit() {
+        const el = document.getElementById("selScopeHScaleUnit");
+        return el && el.value ? el.value : "s";
+      }
+
+      function getScopeHScaleUnitMultiplier(unit) {
+        switch (unit) {
+          case "ns":
+            return 1e-9;
+          case "us":
+            return 1e-6;
+          case "ms":
+            return 1e-3;
+          case "s":
+          default:
+            return 1;
+        }
+      }
+
+      async function refreshScopeFromInstrument(options) {
+        const silent = options && options.silent;
+        try {
+          const res = await fetch("/scope/display");
+          const data = await res.json();
+          if (!res.ok) {
+            if (!silent) setStatus("scope read: " + (data.detail || res.status));
+            return;
+          }
+          const unit = getScopeHScaleUnit();
+          const mult = getScopeHScaleUnitMultiplier(unit);
+          const hEl = document.getElementById("inpScopeHScaleVal");
+          if (hEl && data.horizontal_scale_s_per_div != null && Number.isFinite(mult) && mult > 0) {
+            const val = data.horizontal_scale_s_per_div / mult;
+            hEl.value = String(val);
+          }
+          CHANNEL_IDS.forEach((ch) => {
+            const c = data.channels && data.channels[ch];
+            if (!c) return;
+            const sEl = document.getElementById("inpScope" + ch + "Scale");
+            const pEl = document.getElementById("inpScope" + ch + "Pos");
+            if (sEl && c.scale_v_per_div != null) sEl.value = String(c.scale_v_per_div);
+            if (pEl && c.position_div != null) pEl.value = String(c.position_div);
+          });
+        } catch (e) {
+          if (!silent) setStatus("scope read: " + e);
+        }
+      }
+
+      const btnScopeRefresh = document.getElementById("btnScopeRefresh");
+      if (btnScopeRefresh) btnScopeRefresh.onclick = () => refreshScopeFromInstrument();
+
+      const scopeAccordionBtn = document.getElementById("btnScopeAccordion");
+      const scopeAccordionContent = document.getElementById("scopeBlockContent");
+      const scopeAccordionArrow = document.getElementById("scopeAccordionArrow");
+      if (scopeAccordionBtn && scopeAccordionContent) {
+        scopeAccordionBtn.onclick = () => {
+          const isOpen = scopeAccordionContent.style.display !== "none";
+          scopeAccordionContent.style.display = isOpen ? "none" : "block";
+          if (scopeAccordionArrow) {
+            scopeAccordionArrow.textContent = isOpen ? "[+]" : "[-]";
+          }
+        };
+      }
+
+      const btnScopeHApply = document.getElementById("btnScopeHApply");
+      if (btnScopeHApply) {
+        btnScopeHApply.onclick = async () => {
+          const unit = getScopeHScaleUnit();
+          const mult = getScopeHScaleUnitMultiplier(unit);
+          const valEl = document.getElementById("inpScopeHScaleVal");
+          const v = parseFloat(valEl && valEl.value ? valEl.value : "");
+          if (!Number.isFinite(v) || v <= 0) {
+            setStatus("invalid timebase (" + unit + "/div)");
+            return;
+          }
+          const scale_s_per_div = v * mult;
+          try {
+            const res = await fetch("/scope/horizontal", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                scale_s_per_div,
+                trigger_left_fraction: 0.2,
+              }),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+              setStatus(data.detail || "horizontal failed");
+              return;
+            }
+            const horPos = data.horizontal_hor_pos_percent;
+            if (horPos != null) {
+              const st = data.acquire_state ? (" state=" + data.acquire_state) : "";
+              const delMod = data.horizontal_hor_del_mod
+                ? (" HOR:DEL:MOD=" + data.horizontal_hor_del_mod)
+                : "";
+              setStatus(
+                "scope H: " +
+                  v +
+                  " " +
+                  unit +
+                  "/div (HOR:POS=" +
+                  horPos +
+                  ")" +
+                  st +
+                  delMod
+              );
+            } else if (
+              data.horizontal_delay_s != null &&
+              data.horizontal_position_s != null
+            ) {
+              setStatus(
+                "scope H: " +
+                  v +
+                  " " +
+                  unit +
+                  "/div (delay=" +
+                  data.horizontal_delay_s.toExponential(3) +
+                  "s, pos=" +
+                  data.horizontal_position_s.toExponential(3) +
+                  "s)"
+              );
+            } else {
+              setStatus("scope H: " + v + " " + unit + "/div");
+            }
+            refreshScopeFromInstrument();
+          } catch (e) {
+            setStatus("scope horizontal: " + e);
+          }
+        };
+      }
+
+      document.querySelectorAll(".btnScopeChApply").forEach((btn) => {
+        btn.onclick = async () => {
+          const ch = btn.getAttribute("data-ch");
+          const scaleEl = document.getElementById("inpScope" + ch + "Scale");
+          const posEl = document.getElementById("inpScope" + ch + "Pos");
+          const body = {};
+          if (scaleEl && String(scaleEl.value).trim() !== "") {
+            const s = parseFloat(scaleEl.value);
+            if (Number.isFinite(s) && s > 0) body.scale_v_per_div = s;
+          }
+          if (posEl && String(posEl.value).trim() !== "") {
+            const p = parseFloat(posEl.value);
+            if (Number.isFinite(p)) body.position_div = p;
+          }
+          if (Object.keys(body).length === 0) {
+            setStatus("enter V/div and/or position (div)");
+            return;
+          }
+          try {
+            const res = await fetch(
+              "/scope/channel/" + encodeURIComponent(ch) + "/vertical",
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+              }
+            );
+            const data = await res.json();
+            if (!res.ok) {
+              setStatus(data.detail || ch + " vertical failed");
+              return;
+            }
+            setStatus("scope " + ch + " ok");
+            refreshScopeFromInstrument();
+          } catch (e) {
+            setStatus("scope " + ch + ": " + e);
+          }
+        };
+      });
+
+      refreshScopeFromInstrument({ silent: true });
 
       function computeFrequencyHz(time, voltage) {
         if (!time || time.length < 3 || !voltage || voltage.length !== time.length)
@@ -881,32 +1205,6 @@
         }
       };
 
-      document.getElementById("btnReloadHist").onclick = async () => {
-        const channels = getHistDrawChannels();
-        if (channels.length === 0) {
-          drawHistogramMulti([]);
-          setStatus("no channel selected for histogram");
-          return;
-        }
-        try {
-          const results = await Promise.all(
-            channels.map((ch) =>
-              fetch("/analysis/histogram?channel=" + encodeURIComponent(ch)).then((r) => r.json())
-            )
-          );
-          const items = channels.map((ch, i) => ({
-            channel: ch,
-            bins: results[i].bins || [],
-            counts: results[i].counts || [],
-          }));
-          drawHistogramMulti(items);
-          const total = results.reduce((s, d) => s + (d.count || 0), 0);
-          setStatus("hist count=" + total);
-        } catch (e) {
-          setStatus("hist error " + e);
-        }
-      };
-
       document.getElementById("btnClearHist").onclick = async () => {
         const channels = getHistDrawChannels();
         if (channels.length === 0) {
@@ -934,6 +1232,7 @@
       const triggerStatusEl = document.getElementById("triggerStatus");
       const triggerStatsEl = document.getElementById("triggerStats");
       let triggerStatusTimer = null;
+      let lastKnownRunId = null;
 
       function setTriggerStatus(
         active,
@@ -946,6 +1245,19 @@
       ) {
         isRecording = !!active;
         updateActivityBadge();
+        const runEl = document.getElementById("runIdDisplay");
+        if (runEl) {
+          if (active && runId) {
+            lastKnownRunId = runId;
+            runEl.textContent = "Run: " + runId;
+            runEl.classList.add("recording");
+          } else {
+            runEl.classList.remove("recording");
+            runEl.textContent = lastKnownRunId
+              ? "Last run: " + lastKnownRunId
+              : "Run: —";
+          }
+        }
         if (!triggerStatusEl) return;
         if (!triggerStatsEl) return;
         if (!active) {
@@ -1027,12 +1339,18 @@
               shouldDraw = drawChannels.some(
                 (ch) =>
                   (lastHistogramDisplayedHistCount[ch] || 0) === 0 ||
-                  (histCounts[ch] || 0) - (lastHistogramDisplayedHistCount[ch] || 0) >= batch
+                  (histCounts[ch] || 0) -
+                    (lastHistogramDisplayedHistCount[ch] || 0) >=
+                    batch
               );
             } else {
               shouldDraw =
                 wasRecording &&
-                drawChannels.some((ch) => (histCounts[ch] || 0) > (lastHistogramDisplayedHistCount[ch] || 0));
+                drawChannels.some(
+                  (ch) =>
+                    (histCounts[ch] || 0) >
+                    (lastHistogramDisplayedHistCount[ch] || 0)
+                );
             }
           }
 
@@ -1042,15 +1360,17 @@
             });
             const results = await Promise.all(
               drawChannels.map((ch) =>
-                fetch("/analysis/histogram?channel=" + encodeURIComponent(ch)).then((r) => r.json())
+                fetch(buildHistogramUrl(ch)).then((r) => r.json())
               )
             );
-            const items = drawChannels.map((ch, i) => ({
-              channel: ch,
-              bins: results[i].bins || [],
-              counts: results[i].counts || [],
-            }));
-            drawHistogramMulti(items);
+            if (!results.some((d) => d.detail)) {
+              const items = drawChannels.map((ch, i) => ({
+                channel: ch,
+                bins: results[i].bins || [],
+                counts: results[i].counts || [],
+              }));
+              drawHistogramMulti(items);
+            }
           }
         } catch {
           // ignore
@@ -1058,13 +1378,12 @@
       }
 
       document.getElementById("btnStartTriggered").onclick = async () => {
-        const runId = document.getElementById("inpRunId").value || null;
         const channels = getTriggerCaptureChannels();
         try {
           const res = await fetch("/trigger_capture/start", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ run_id: runId, channels: channels.length ? channels : ["CH1"] }),
+            body: JSON.stringify({ channels: channels.length ? channels : ["CH1"] }),
           });
           const data = await res.json();
           if (!res.ok) {
@@ -1159,21 +1478,25 @@
             try {
               const results = await Promise.all(
                 drawChannels.map((ch) =>
-                  fetch("/analysis/histogram?channel=" + encodeURIComponent(ch)).then((r) => r.json())
+                  fetch(buildHistogramUrl(ch)).then((r) => r.json())
                 )
               );
-              const items = drawChannels.map((ch, i) => ({
-                channel: ch,
-                bins: results[i].bins || [],
-                counts: results[i].counts || [],
-              }));
-              drawHistogramMulti(items);
+              if (!results.some((d) => d.detail)) {
+                const items = drawChannels.map((ch, i) => ({
+                  channel: ch,
+                  bins: results[i].bins || [],
+                  counts: results[i].counts || [],
+                }));
+                drawHistogramMulti(items);
+              }
             } catch (e) {}
           }
         } catch (e) {
           setStatus("triggered capture stop error " + e);
         }
       };
+
+      refreshTriggerStatus();
     </script>
   </body>
 </html>
