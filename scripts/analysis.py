@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
 """
-Batch histogram from many CSVs (legacy script).
-
-By default only the peak *voltage* histogram is shown. Time-at-peak and 2D plots
-are opt-in via --legacy-time (often not needed; see scripts/quick_review.py).
 """
 
 import argparse
@@ -13,7 +9,24 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
-threshold = 0.2 # V
+plt.rcParams.update({
+    'font.family': 'Times New Roman',
+    'mathtext.fontset': 'stix',
+    'font.size': 24,
+    'axes.linewidth': 1.0,
+    'axes.grid': True,
+    'axes.axisbelow': True,
+    'xtick.direction': 'in',
+    'ytick.direction': 'in',
+    'xtick.minor.visible': True,
+    'ytick.minor.visible': True,
+    'xtick.major.size': 10,
+    'ytick.major.size': 10,
+    'xtick.minor.size': 5,
+    'ytick.minor.size': 5,
+})
+
+threshold = 0.0 # V
 
 def read_csv_2cols(filepath: Path, skiprows: int = 1):
     """
@@ -107,10 +120,9 @@ def main():
             print(f"... and {len(skipped_files) - 20} more")
 
     plt.figure(figsize=(8, 5))
-    plt.hist(max_voltages, bins=args.bins)
+    plt.hist(max_voltages, bins=args.bins, histtype='step')
     plt.xlabel("Maximum voltage")
     plt.ylabel("Counts")
-    plt.title("Peak voltage distribution")
     plt.tight_layout()
 
     if args.save:
