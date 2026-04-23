@@ -494,6 +494,7 @@
             <input id="inpTrigLevel" type="number" step="0.1" />
           </label>
           <button id="btnApplyTrigger">Apply Trigger</button>
+          <button id="btnRecoverTrigger">Recover Trigger (AUTO)</button>
         </div>
         <hr />
           <div>
@@ -1191,6 +1192,34 @@
           setStatus("trigger updated");
         } catch (e) {
           setStatus("trigger error " + e);
+        }
+      };
+
+      document.getElementById("btnRecoverTrigger").onclick = async () => {
+        try {
+          const res = await fetch("/trigger/recover", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ mode: "AUTO" }),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            setStatus("recover trigger failed: " + (data.detail || res.status));
+            return;
+          }
+          if (data.trigger && data.trigger.mode) {
+            const sel = document.getElementById("selTrigMode");
+            if (sel) sel.value = data.trigger.mode;
+          }
+          setStatus(
+            "trigger recovered (mode=" +
+              ((data.trigger && data.trigger.mode) || "AUTO") +
+              ", acq=" +
+              (data.acquire_state || "unknown") +
+              ")"
+          );
+        } catch (e) {
+          setStatus("recover trigger error " + e);
         }
       };
 

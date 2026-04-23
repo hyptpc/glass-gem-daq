@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Literal, Optional, Tuple, TypedDict
+from typing import Any, Callable, Dict, Literal, Optional, Tuple, TypedDict
 
 import json
 import re
@@ -58,6 +58,8 @@ class ScopeDriver:
         self._last_data_stop: int = config.stop_index
         # Saved when starting triggered capture session (restore on end).
         self._saved_acquire_stopafter: str | None = None
+        self._saved_trigger_mode: str | None = None
+        self._saved_acquire_state: str | None = None
 
     @property
     def scope(self) -> pyvisa.resources.MessageBasedResource:
@@ -199,14 +201,29 @@ class ScopeDriver:
         """
         Configure single-sequence acquisition so each RUN completes after one trigger.
 
-        Saves current ACQUIRE:STOPAFTER? and sets SEQUENCE; call
+        Saves current ACQUIRE:STOPAFTER?/TRIGGER:A:MODE?/ACQUIRE:STATE? and enforces
+        TRIGGER NORMAL + STOPAFTER SEQUENCE; call
         end_triggered_capture_session() when done.
         """
         with self._lock:
             scope = self.scope
             self._saved_acquire_stopafter = None
+            self._saved_trigger_mode = None
+            self._saved_acquire_state = None
             try:
                 self._saved_acquire_stopafter = scope.query("ACQUIRE:STOPAFTER?").strip()
+            except Exception:
+                pass
+            try:
+                self._saved_trigger_mode = scope.query("TRIGGER:A:MODE?").strip()
+            except Exception:
+                pass
+            try:
+                self._saved_acquire_state = self.get_acquire_state()
+            except Exception:
+                pass
+            try:
+                scope.write("TRIGGER:A:MODE NORMAL")
             except Exception:
                 pass
             try:
@@ -215,42 +232,45 @@ class ScopeDriver:
                 pass
 
     def end_triggered_capture_session(self) -> None:
-        """Restore ACQUIRE:STOPAFTER from before begin_triggered_capture_session()."""
+        """Restore ACQUIRE:STOPAFTER/TRIGGER:A:MODE/ACQUIRE:STATE from before session start."""
         with self._lock:
             if self._saved_acquire_stopafter:
                 try:
                     self.scope.write(f"ACQUIRE:STOPAFTER {self._saved_acquire_stopafter}")
                 except Exception:
                     pass
+            if self._saved_trigger_mode:
+                try:
+                    self.scope.write(f"TRIGGER:A:MODE {self._saved_trigger_mode}")
+                except Exception:
+                    pass
+            if self._saved_acquire_state:
+                try:
+                    self.set_acquire_state(self._saved_acquire_state)
+                except Exception:
+                    pass
             self._saved_acquire_stopafter = None
+            self._saved_trigger_mode = None
+            self._saved_acquire_state = None
 
-    def _wait_acquisition_complete_unlocked(self, timeout_s: float) -> None:
+    def _query_trigger_runtime_state_unlocked(self) -> Optional[str]:
         """
-        After ACQUIRE:STATE RUN, wait until one acquisition finishes (poll ACQUIRE:STATE?).
+        Best-effort trigger runtime state query.
 
-        Caller must hold self._lock. Raises TimeoutError if no completion before timeout
-        (e.g. trigger never occurs).         If this always times out on your scope, set env ``OSC_TRIGGER_CAPTURE_STRICT=0``
-        (default) so triggered capture reads the buffer without waiting for STOP.
+        Typical values on Tek scopes include READY / AUTO / TRIGGER.
         """
-        scope = self.scope
-        deadline = time.monotonic() + timeout_s
-        while time.monotonic() < deadline:
+        for cmd in ("TRIGGER:STATE?", "TRIG:STATE?"):
             try:
-                st = scope.query("ACQUIRE:STATE?").strip().upper()
+                return self.scope.query(cmd).strip().upper()
             except Exception:
-                time.sleep(0.005)
                 continue
-            if st in ("STOP", "STOPPED"):
-                return
-            time.sleep(0.002)
-        raise TimeoutError(
-            f"acquisition did not complete within {timeout_s}s (no trigger or scope busy)"
-        )
+        return None
 
     def acquire_waveform_multi_after_trigger(
         self,
         channels: list[str],
         acquisition_timeout_s: float = 30.0,
+        should_abort: Optional[Callable[[], bool]] = None,
     ) -> Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray, WfmOutPre]]:
         """
         Arm one acquisition, wait for it to complete (trigger + record), then CURVE? per channel.
@@ -263,7 +283,25 @@ class ScopeDriver:
             self.scope.write("ACQUIRE:STATE RUN")
             # Let RUN latch before polling so we do not treat pre-RUN idle STOP as "done".
             time.sleep(0.01)
-            self._wait_acquisition_complete_unlocked(acquisition_timeout_s)
+            deadline = time.monotonic() + acquisition_timeout_s
+            while time.monotonic() < deadline:
+                if should_abort is not None and should_abort():
+                    raise TimeoutError("acquisition wait aborted by stop request")
+                try:
+                    # Use alias-aware helper; some models only support ACQ:STATE?.
+                    acq_state = self.get_acquire_state()
+                except Exception:
+                    time.sleep(0.005)
+                    continue
+                # Primary completion signal: one-shot acquisition reached STOP.
+                if acq_state in ("STOP", "STOPPED"):
+                    break
+                time.sleep(0.002)
+            else:
+                raise TimeoutError(
+                    "acquisition did not complete within "
+                    f"{acquisition_timeout_s}s (no trigger or scope busy)"
+                )
             results: Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray, WfmOutPre]] = {}
             for ch in channels:
                 self.setup_waveform_transfer(channel=ch)
@@ -340,6 +378,7 @@ class ScopeDriver:
                 state["level"] = float(scope.query("TRIGGER:A:LEVEL?"))
             except Exception:
                 state["level"] = None
+            state["runtime_state"] = self._query_trigger_runtime_state_unlocked()
             return state
 
     def set_trigger_source(self, source: str) -> None:
@@ -360,11 +399,22 @@ class ScopeDriver:
             # Tek scopes sometimes use both ACQ:STATE and ACQUIRE:STATE aliases.
             for cmd in ("ACQ:STATE?", "ACQUIRE:STATE?"):
                 try:
-                    return self.scope.query(cmd).strip().upper()
+                    raw = self.scope.query(cmd).strip().upper()
+                    # Some models return numeric state: 1=RUN, 0=STOP.
+                    if raw in ("1", "ON"):
+                        return "RUN"
+                    if raw in ("0", "OFF"):
+                        return "STOP"
+                    return raw
                 except Exception:
                     continue
             # Fallback (will raise upstream if actually used)
-            return self.scope.query("ACQ:STATE?").strip().upper()
+            raw = self.scope.query("ACQ:STATE?").strip().upper()
+            if raw in ("1", "ON"):
+                return "RUN"
+            if raw in ("0", "OFF"):
+                return "STOP"
+            return raw
 
     def set_acquire_state(self, state: str) -> None:
         """Set acquisition state (e.g. RUN or STOP)."""
@@ -590,15 +640,20 @@ def save_json(path: Path, payload: Dict[str, Any]) -> None:
     )
 
 
-def build_capture_paths(outdir: Path, channel: str) -> Dict[str, Path]:
+def build_capture_paths(
+    outdir: Path,
+    channel: str,
+    base_name: str | None = None,
+) -> Dict[str, Path]:
     """Return paths for one capture: outdir/CHx/csv/<timestamp>.csv and outdir/CHx/json/<timestamp>.json."""
     ch_dir = outdir / sanitize_filename(channel)
     csv_dir = ch_dir / "csv"
     json_dir = ch_dir / "json"
     for d in (csv_dir, json_dir):
         d.mkdir(parents=True, exist_ok=True)
-    now = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    base = sanitize_filename(now)
+    base = sanitize_filename(base_name) if base_name else sanitize_filename(
+        datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    )
     return {
         "csv": csv_dir / f"{base}.csv",
         "json": json_dir / f"{base}.json",

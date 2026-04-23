@@ -28,7 +28,6 @@ from app.config import (
     STOP_INDEX,
     TIMEOUT_MS,
     TRIGGER_CAPTURE_ACQUISITION_TIMEOUT_S,
-    TRIGGER_CAPTURE_STRICT_TRIGGER,
 )
 from app.scope import (
     ScopeConfig,
@@ -401,6 +400,41 @@ async def set_trigger_mode(payload: Dict[str, Any]) -> Dict[str, Any]:
     return state
 
 
+@app.post("/trigger/recover")
+async def recover_trigger_mode(payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Recover from a stuck single-shot trigger/acquisition state.
+
+    Default target mode is ``AUTO``; ``NORMAL`` is also accepted.
+    """
+    mode = "AUTO"
+    if payload and "mode" in payload:
+        mode = str(payload.get("mode", "AUTO")).strip().upper()
+    if mode not in ("AUTO", "NORMAL"):
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "mode must be AUTO or NORMAL"},
+        )
+    async with driver_lock:
+        # Restore common live-acquisition settings.
+        driver.set_trigger_mode(mode)
+        try:
+            driver.set_stopa_runstop()
+        except Exception:
+            pass
+        try:
+            driver.set_acquire_state("RUN")
+        except Exception:
+            pass
+        state = driver.get_trigger_state()
+        acquire_state = None
+        try:
+            acquire_state = driver.get_acquire_state()
+        except Exception:
+            acquire_state = None
+    return {"trigger": state, "acquire_state": acquire_state, "recovered": True}
+
+
 @app.post("/trigger/level")
 async def set_trigger_level(payload: Dict[str, Any]) -> Dict[str, Any]:
     level = float(payload["level"])
@@ -477,6 +511,12 @@ async def websocket_stream(ws: WebSocket) -> None:
     channels = [DEFAULT_CHANNEL]
     first_wait = True
     try:
+        # Ensure live acquisition is running for stream view.
+        async with driver_lock:
+            try:
+                driver.set_acquire_state("RUN")
+            except Exception:
+                pass
         while True:
             try:
                 timeout = 1.0 if first_wait else 0.05
@@ -623,32 +663,23 @@ def _save_one_channel_sync(
     save_json(json_path, meta)
 
 
-def _acquire_waveform_sync() -> tuple:
-    """Blocking single-channel acquire. Run in thread pool."""
-    driver.setup_waveform_transfer()
-    time_s, volts, raw, wfm = driver.acquire_waveform()
-    meta = driver.get_basic_metadata()
-    meta["wfmoutpre"] = dict(wfm)
-    return time_s, volts, raw, meta
-
-
-def _acquire_waveform_multi_sync(channels: List[str]) -> tuple:
-    """Blocking multi-channel acquire. Run in thread pool."""
-    multi = driver.acquire_waveform_multi(channels)
-    metas = {ch: driver.get_basic_metadata(ch) for ch in channels}
-    return multi, metas
-
-
-def _acquire_waveform_multi_sync_after_trigger(channels: List[str]) -> tuple:
+def _acquire_waveform_multi_sync_after_trigger(
+    channels: List[str],
+) -> Dict[str, tuple[np.ndarray, np.ndarray, np.ndarray, Any]]:
     """
     One completed acquisition per save: ARM + wait for trigger/record, then CURVE per channel.
     """
     multi = driver.acquire_waveform_multi_after_trigger(
         channels,
         acquisition_timeout_s=TRIGGER_CAPTURE_ACQUISITION_TIMEOUT_S,
+        should_abort=lambda: trigger_capture_stop_requested,
     )
-    metas = {ch: driver.get_basic_metadata(ch) for ch in channels}
-    return multi, metas
+    return multi
+
+
+def _get_basic_metadata_multi_sync(channels: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Blocking metadata read once per run (thread pool)."""
+    return {ch: driver.get_basic_metadata(ch) for ch in channels}
 
 
 async def _trigger_capture_worker(run_id: str, channels: List[str]) -> None:
@@ -662,10 +693,9 @@ async def _trigger_capture_worker(run_id: str, channels: List[str]) -> None:
     settings (horizontal scale, record length, trigger, channel setup, etc.). One ``run_id``
     should mean one fixed acquisition profile.
 
-    When ``TRIGGER_CAPTURE_STRICT_TRIGGER`` is true, each save follows a completed
-    acquisition (``ACQUIRE:STOPAFTER SEQUENCE``, ``ACQUIRE:STATE RUN``, wait, then ``CURVE?``).
-    When false (default), the current waveform buffer is read every iteration so files are
-    saved reliably; duplicates are possible if the scope has not retriggered yet.
+    Each save follows one completed triggered acquisition:
+    session start: ``TRIGGER:A:MODE NORMAL`` + ``ACQUIRE:STOPAFTER SEQUENCE``,
+    each save: ``ACQUIRE:STATE RUN`` -> wait -> ``CURVE?``.
     """
     global trigger_capture_saved_count, trigger_capture_last_saved_at
     global baseline_common, histogram_values
@@ -675,42 +705,40 @@ async def _trigger_capture_worker(run_id: str, channels: List[str]) -> None:
     trigger_capture_last_saved_at = None
     loop = asyncio.get_event_loop()
     session_started = False
+    base_metas: Dict[str, Dict[str, Any]] = {}
     try:
-        if TRIGGER_CAPTURE_STRICT_TRIGGER:
-            await loop.run_in_executor(None, driver.begin_triggered_capture_session)
-            session_started = True
+        await loop.run_in_executor(None, driver.begin_triggered_capture_session)
+        session_started = True
+        base_metas = await loop.run_in_executor(
+            None,
+            _get_basic_metadata_multi_sync,
+            channels,
+        )
         while True:
             if trigger_capture_stop_requested:
                 break
             try:
-                if TRIGGER_CAPTURE_STRICT_TRIGGER:
-                    multi, metas = await loop.run_in_executor(
-                        None,
-                        _acquire_waveform_multi_sync_after_trigger,
-                        channels,
-                    )
-                else:
-                    multi, metas = await loop.run_in_executor(
-                        None,
-                        _acquire_waveform_multi_sync,
-                        channels,
-                    )
+                multi = await loop.run_in_executor(
+                    None,
+                    _acquire_waveform_multi_sync_after_trigger,
+                    channels,
+                )
             except TimeoutError:
-                if not TRIGGER_CAPTURE_STRICT_TRIGGER:
-                    raise
                 if trigger_capture_stop_requested:
                     break
+                # No completed triggered acquisition in this cycle; keep waiting.
                 continue
             if trigger_capture_stop_requested:
                 break
+            capture_base_name = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             save_tasks = []
             for ch in channels:
                 time_s, volts, raw, wfm = multi[ch]
-                meta = metas[ch].copy()
+                meta = base_metas.get(ch, {}).copy()
                 meta["wfmoutpre"] = dict(wfm)
                 meta["n_points"] = int(len(raw))
                 meta["timestamp_local"] = datetime.now().isoformat(timespec="seconds")
-                paths = build_capture_paths(base_dir, ch)
+                paths = build_capture_paths(base_dir, ch, base_name=capture_base_name)
                 meta["csv_file"] = paths["csv"].name
                 if baseline_common is not None:
                     diff = np.abs(volts - baseline_common)
@@ -728,6 +756,8 @@ async def _trigger_capture_worker(run_id: str, channels: List[str]) -> None:
             trigger_capture_saved_count += 1
             trigger_capture_last_saved_at = datetime.now()
     except asyncio.CancelledError:
+        return
+    except Exception:
         return
     finally:
         if session_started:
@@ -794,6 +824,15 @@ async def stop_trigger_capture() -> Dict[str, Any]:
     global trigger_capture_task, trigger_capture_active_run, trigger_capture_saved_count
     global trigger_capture_stop_requested
     if trigger_capture_task is None:
+        async with driver_lock:
+            try:
+                driver.set_trigger_mode("AUTO")
+            except Exception:
+                pass
+            try:
+                driver.set_acquire_state("RUN")
+            except Exception:
+                pass
         trigger_capture_stop_requested = False
         return {
             "status": "stopped",
@@ -803,6 +842,15 @@ async def stop_trigger_capture() -> Dict[str, Any]:
         }
     if trigger_capture_task.done():
         run_id = trigger_capture_active_run
+        async with driver_lock:
+            try:
+                driver.set_trigger_mode("AUTO")
+            except Exception:
+                pass
+            try:
+                driver.set_acquire_state("RUN")
+            except Exception:
+                pass
         trigger_capture_task = None
         trigger_capture_active_run = None
         trigger_capture_stop_requested = False
@@ -814,13 +862,30 @@ async def stop_trigger_capture() -> Dict[str, Any]:
         }
     run_id = trigger_capture_active_run
     trigger_capture_stop_requested = True
-    trigger_capture_task.cancel()
     try:
-        await trigger_capture_task
+        await asyncio.wait_for(trigger_capture_task, timeout=0.3)
+    except asyncio.TimeoutError:
+        # Worker may still be unwinding in thread-pool scope I/O; report progress
+        # without hanging this API call.
+        return {
+            "status": "stopping",
+            "run_id": run_id,
+            "saved_count": trigger_capture_saved_count,
+            "histogram_count": _histogram_count_dict(),
+        }
     except asyncio.CancelledError:
         pass
     trigger_capture_task = None
     trigger_capture_active_run = None
+    async with driver_lock:
+        try:
+            driver.set_trigger_mode("AUTO")
+        except Exception:
+            pass
+        try:
+            driver.set_acquire_state("RUN")
+        except Exception:
+            pass
     trigger_capture_stop_requested = False
     return {
         "status": "stopped",

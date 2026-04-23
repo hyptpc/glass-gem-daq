@@ -24,12 +24,6 @@ TIMEOUT_MS = int(os.environ.get("OSC_TIMEOUT_MS", "30000"))
 TRIGGER_CAPTURE_ACQUISITION_TIMEOUT_S = float(
     os.environ.get("OSC_TRIGGER_CAPTURE_TIMEOUT_S", "30")
 )
-# Default false: prefer saving every loop over avoiding duplicate buffers (same capture may
-# repeat if the scope has not retriggered yet). Set true only if you need SEQUENCE+wait and
-# your instrument reports acquisition completion reliably (OSC_TRIGGER_CAPTURE_STRICT=1).
-TRIGGER_CAPTURE_STRICT_TRIGGER = (
-    os.environ.get("OSC_TRIGGER_CAPTURE_STRICT", "0").lower() in ("1", "true", "yes")
-)
 
 # Output directory for saved waveforms (default: outputs/)
 OUTDIR = Path(os.environ.get("OUTPUT_DIR", "outputs"))
