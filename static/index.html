@@ -384,10 +384,10 @@
               id="btnScopeAccordion"
               style="width: 100%; text-align: left; background: #1a1a1a; border: 1px solid #333; color: #e0e0e0; border-radius: 4px; padding: 6px 8px; cursor: pointer;"
             >
-              <span id="scopeAccordionArrow" style="display: inline-block; width: 18px;">[-]</span>
+              <span id="scopeAccordionArrow" style="display: inline-block; width: 18px;">[+]</span>
               Scope (instrument)
             </button>
-            <div id="scopeBlockContent" style="margin-top: 8px;">
+            <div id="scopeBlockContent" style="margin-top: 8px; display: none;">
               <p style="font-size: 12px; color: #888; margin: 0 0 8px;">
                 SCPI: timebase and per-channel vertical scale / position on the oscilloscope.
               </p>
@@ -553,6 +553,14 @@
                 <label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" id="trigChCH4" /> CH4</label>
               </div>
             </div>
+            <label style="display:block;margin-bottom:8px;font-size:13px;">
+              Comment
+              <input
+                id="inpTrigComment"
+                type="text"
+                style="width:100%;max-width:280px;margin-top:4px;box-sizing:border-box;"
+              />
+            </label>
             <button id="btnStartTriggered">Start Triggered Capture</button>
             <button id="btnStopTriggered">Stop Triggered Capture</button>
             <div id="triggerStatus" style="margin-top:4px;font-size:13px;color:#ddd;">
@@ -957,7 +965,7 @@
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 scale_s_per_div,
-                trigger_left_fraction: 0.2,
+                trigger_left_fraction: 0.3,
               }),
             });
             const data = await res.json();
@@ -1379,11 +1387,16 @@
 
       document.getElementById("btnStartTriggered").onclick = async () => {
         const channels = getTriggerCaptureChannels();
+        const cEl = document.getElementById("inpTrigComment");
+        const comment = cEl ? String(cEl.value || "").trim() : "";
         try {
           const res = await fetch("/trigger_capture/start", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ channels: channels.length ? channels : ["CH1"] }),
+            body: JSON.stringify({
+              channels: channels.length ? channels : ["CH1"],
+              comment: comment,
+            }),
           });
           const data = await res.json();
           if (!res.ok) {

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import threading
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -11,7 +12,7 @@ from typing import Any, Dict, List, Optional
 import asyncio
 
 import numpy as np
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -43,6 +44,32 @@ ALL_CHANNELS = ["CH1", "CH2", "CH3", "CH4"]
 TRIGGER_EDGE_SOURCES = ["CH1", "CH2", "CH3", "CH4", "EXT"]
 
 _RUN_DIR_RE = re.compile(r"^run(\d{4})$")
+
+run_misc_comment_lock = threading.Lock()
+# Same path as ``mkdir outputs/misc`` + ``touch outputs/misc/comments.txt``.
+GLOBAL_MISC_COMMENTS_PATH = OUTDIR / "misc" / "comments.txt"
+
+
+def append_misc_start_record(run_id: str, comment: str) -> None:
+    """
+    Append one line to ``OUTPUT_DIR/misc/comments.txt``: local time, run id, optional text.
+
+    Always writes a line (comment may be empty).
+    """
+    ts = datetime.now().strftime("%Y %m/%d %H:%M:%S")
+    msg = (
+        comment.strip().replace("\n", " ").replace("\r", " ")
+        if isinstance(comment, str)
+        else ""
+    )
+    if msg:
+        line = f"{ts}  [{run_id}]  {msg}\n"
+    else:
+        line = f"{ts}  [{run_id}]\n"
+    with run_misc_comment_lock:
+        GLOBAL_MISC_COMMENTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with GLOBAL_MISC_COMMENTS_PATH.open("a", encoding="utf-8") as f:
+            f.write(line)
 
 
 def next_run_id_from_outdir() -> str:
@@ -712,7 +739,9 @@ def _histogram_count_dict() -> Dict[str, int]:
 
 
 @app.post("/trigger_capture/start")
-async def start_trigger_capture(payload: Dict[str, Any]) -> Dict[str, Any]:
+async def start_trigger_capture(
+    payload: Dict[str, Any] = Body(default_factory=dict),
+) -> Dict[str, Any]:
     """
     Start background trigger-driven capture loop.
 
@@ -734,6 +763,13 @@ async def start_trigger_capture(payload: Dict[str, Any]) -> Dict[str, Any]:
         )
     run_id = next_run_id_from_outdir()
     channels = _normalize_channels(payload.get("channels", [DEFAULT_CHANNEL]))
+    comment_raw = payload.get("comment")
+    start_comment = (
+        comment_raw.strip()
+        if isinstance(comment_raw, str)
+        else ""
+    )
+    append_misc_start_record(run_id, start_comment)
     trigger_capture_stop_requested = False
     trigger_capture_started_at = datetime.now()
     trigger_capture_last_saved_at = None
@@ -776,13 +812,13 @@ async def stop_trigger_capture() -> Dict[str, Any]:
             "saved_count": trigger_capture_saved_count,
             "histogram_count": _histogram_count_dict(),
         }
+    run_id = trigger_capture_active_run
     trigger_capture_stop_requested = True
     trigger_capture_task.cancel()
     try:
         await trigger_capture_task
     except asyncio.CancelledError:
         pass
-    run_id = trigger_capture_active_run
     trigger_capture_task = None
     trigger_capture_active_run = None
     trigger_capture_stop_requested = False
