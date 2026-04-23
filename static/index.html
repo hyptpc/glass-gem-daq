@@ -75,6 +75,23 @@
         gap: 4px;
         min-height: 0;
       }
+      .scope-webapp-wrap {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+        border: 1px solid #333;
+        border-radius: 4px;
+        background: #000;
+      }
+      .scope-webapp-frame {
+        width: 125%;
+        height: 125%;
+        min-height: 0;
+        border: 0;
+        display: block;
+        transform: scale(0.8);
+        transform-origin: 0 0;
+      }
       .waveform-channel-row {
         flex: 1;
         min-height: 80px;
@@ -312,38 +329,29 @@
       <div class="main-left">
         <section style="flex: 1.5; display: flex; flex-direction: column; min-height: 0;">
           <div style="display: flex; justify-content: space-between; align-items: center;">
-            <h3>Waveform</h3>
-            <div id="freqDisplay" style="font-size: 14px; color: #81c784;">— Hz</div>
+            <h3>Scope WebApp</h3>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <button id="btnScopeWebappReload">Reload</button>
+              <a
+                id="scopeWebappDirectLink"
+                href="#"
+                target="_blank"
+                rel="noopener noreferrer"
+                style="font-size:12px; color:#90caf9;"
+              >Open directly</a>
+            </div>
           </div>
-          <div id="waveformStack" class="waveform-stack">
-            <div class="waveform-channel-row">
-              <div class="waveform-channel-head">
-                <span class="waveform-channel-label" style="color: #E8D63B;">CH1</span>
-                <label class="waveform-channel-cb"><input type="checkbox" id="chCH1" checked /> On</label>
-              </div>
-              <div id="wavePlotCH1" class="wavePlotChannel"></div>
-            </div>
-            <div class="waveform-channel-row">
-              <div class="waveform-channel-head">
-                <span class="waveform-channel-label" style="color: #2ECFD9;">CH2</span>
-                <label class="waveform-channel-cb"><input type="checkbox" id="chCH2" /> On</label>
-              </div>
-              <div id="wavePlotCH2" class="wavePlotChannel"></div>
-            </div>
-            <div class="waveform-channel-row">
-              <div class="waveform-channel-head">
-                <span class="waveform-channel-label" style="color: #D870E8;">CH3</span>
-                <label class="waveform-channel-cb"><input type="checkbox" id="chCH3" /> On</label>
-              </div>
-              <div id="wavePlotCH3" class="wavePlotChannel"></div>
-            </div>
-            <div class="waveform-channel-row">
-              <div class="waveform-channel-head">
-                <span class="waveform-channel-label" style="color: #52C755;">CH4</span>
-                <label class="waveform-channel-cb"><input type="checkbox" id="chCH4" /> On</label>
-              </div>
-              <div id="wavePlotCH4" class="wavePlotChannel"></div>
-            </div>
+          <div
+            id="scopeWebappError"
+            style="display:none; margin:8px 0; color:#ef9a9a; font-size:12px;"
+          ></div>
+          <div class="scope-webapp-wrap">
+            <iframe
+              id="scopeWebappFrame"
+              src="/scope/webapp/proxy/index.html"
+              title="Scope WebApp"
+              class="scope-webapp-frame"
+            ></iframe>
           </div>
         </section>
         <div class="camera-hist-row">
@@ -371,11 +379,6 @@
           <h3>Controls</h3>
           <div>
             <button id="btnHealth">Health</button>
-          </div>
-          <hr />
-          <div id="streamBlock">
-            <h4>Stream</h4>
-            <button id="btnStreamToggle">Start Stream</button>
           </div>
           <hr />
           <div id="scopeBlock">
@@ -581,12 +584,9 @@
       const CHANNEL_COLORS = { CH1: "#E8D63B", CH2: "#2ECFD9", CH3: "#D870E8", CH4: "#52C755" };
       const statusEl = document.getElementById("status");
       const activityBadgeEl = document.getElementById("activityBadge");
-      const streamBlockEl = document.getElementById("streamBlock");
       const triggerCaptureBlockEl = document.getElementById("triggerCaptureBlock");
       let baselineValue = null;
-      let isStreaming = false;
       let isRecording = false;
-      let lastWaveformChannels = [];
       let cameraClockTimer = null;
 
       function updateCameraClock() {
@@ -631,17 +631,6 @@
         img.addEventListener("load", () => setCameraLastFrameTimestamp());
       })();
 
-      function getEnabledChannels() {
-        return CHANNEL_IDS.filter((ch) => {
-          const el = document.getElementById("ch" + ch);
-          return el && el.checked;
-        });
-      }
-
-      function getDisplayChannels() {
-        return getEnabledChannels();
-      }
-
       function getTriggerCaptureChannels() {
         return CHANNEL_IDS.filter((ch) => {
           const el = document.getElementById("trigCh" + ch);
@@ -683,16 +672,6 @@
         return u;
       }
 
-      CHANNEL_IDS.forEach((ch) => {
-        const el = document.getElementById("ch" + ch);
-        if (el) el.addEventListener("change", () => {
-          if (ws && ws.readyState === WebSocket.OPEN) {
-            const channels = getEnabledChannels();
-            ws.send(JSON.stringify({ channels: channels.length ? channels : ["CH1"] }));
-          }
-        });
-      });
-
       function updateActivityBadge() {
         if (!activityBadgeEl) return;
         activityBadgeEl.className = "";
@@ -700,13 +679,6 @@
         if (isRecording) {
           activityBadgeEl.className = "recording";
           activityBadgeEl.innerHTML = '<span class="dot"></span>RECORDING';
-        } else if (isStreaming) {
-          activityBadgeEl.className = "streaming";
-          activityBadgeEl.innerHTML = '<span class="dot"></span>STREAMING';
-        }
-        if (streamBlockEl) {
-          streamBlockEl.classList.toggle("section-busy", isStreaming);
-          streamBlockEl.classList.toggle("stream-section", isStreaming);
         }
         if (triggerCaptureBlockEl) {
           triggerCaptureBlockEl.classList.toggle("section-busy", isRecording);
@@ -724,57 +696,6 @@
 
       function setStatus(text) {
         statusEl.textContent = "status: " + text;
-      }
-
-      function drawWaveformMulti(time, voltageDict) {
-        const hasTime = time && time.length > 0;
-        const isMulti = voltageDict && typeof voltageDict === "object" && !Array.isArray(voltageDict);
-        const firstCh = isMulti ? (Object.keys(voltageDict)[0] || "CH1") : "CH1";
-        const firstY = isMulti ? (voltageDict[firstCh] || []) : (Array.isArray(voltageDict) ? voltageDict : []);
-        if (!hasTime && (!firstY || firstY.length === 0)) return;
-        const timeUse = hasTime ? time : (firstY ? firstY.map((_, i) => i) : []);
-        const tMin = timeUse[0];
-        const tMax = timeUse[timeUse.length - 1];
-        const trigLevelMv = parseFloat(document.getElementById("inpTrigLevel").value);
-        const displayChannels = getDisplayChannels();
-        CHANNEL_IDS.forEach((ch) => {
-          const showRow = displayChannels.length === 0 ? ch === "CH1" : displayChannels.includes(ch);
-          const y = showRow && (isMulti ? (voltageDict[ch] || []) : (ch === "CH1" ? (Array.isArray(voltageDict) ? voltageDict : []) : []));
-          const voltageMv = y && y.length ? y.map((v) => v * 1000) : [];
-          const len = voltageMv.length ? Math.min(timeUse.length, voltageMv.length) : 0;
-          const shapes = [];
-          if (baselineValue != null) {
-            shapes.push({
-              type: "line", x0: tMin, x1: tMax, y0: baselineValue, y1: baselineValue,
-              xref: "x", yref: "y", line: { color: "#0a0", width: 1, dash: "dot" },
-            });
-          }
-          if (!Number.isNaN(trigLevelMv)) {
-            shapes.push({
-              type: "line", x0: tMin, x1: tMax, y0: trigLevelMv, y1: trigLevelMv,
-              xref: "x", yref: "y", line: { color: "#f80", width: 1, dash: "dash" },
-            });
-          }
-          const layout = {
-            ...plotLayoutDark,
-            margin: { t: 6, r: 20, b: ch === "CH4" ? 32 : 16, l: 40 },
-            xaxis: { ...plotLayoutDark.xaxis, title: ch === "CH4" ? "Time [s]" : "" },
-            yaxis: { ...plotLayoutDark.yaxis, title: "mV" },
-            shapes,
-            showlegend: false,
-          };
-          const trace = len
-            ? [{
-                x: timeUse.slice(0, len),
-                y: voltageMv.slice(0, len),
-                type: "scatter",
-                mode: "lines",
-                line: { color: CHANNEL_COLORS[ch] || "#888", width: 1.2 },
-              }]
-            : [{ x: [], y: [], type: "scatter", mode: "lines" }];
-          Plotly.react("wavePlot" + ch, trace, layout, { responsive: true });
-        });
-        lastWaveformChannels = isMulti ? Object.keys(voltageDict) : ["CH1"];
       }
 
       function drawHistogramMulti(items) {
@@ -1058,113 +979,41 @@
 
       refreshScopeFromInstrument({ silent: true });
 
-      function computeFrequencyHz(time, voltage) {
-        if (!time || time.length < 3 || !voltage || voltage.length !== time.length)
-          return null;
-        const mean =
-          voltage.reduce((a, b) => a + b, 0) / voltage.length;
-        const crossings = [];
-        for (let i = 1; i < voltage.length; i++) {
-          const v0 = voltage[i - 1] - mean;
-          const v1 = voltage[i] - mean;
-          if (v0 < 0 && v1 >= 0) {
-            const dt = time[i] - time[i - 1];
-            const t =
-              dt > 0
-                ? time[i - 1] + dt * (-v0) / (v1 - v0)
-                : time[i - 1];
-            crossings.push(t);
-          }
-        }
-        if (crossings.length < 2) return null;
-        const period =
-          2 * (crossings[crossings.length - 1] - crossings[0]) /
-          (crossings.length - 1);
-        return period > 0 ? 1 / period : null;
-      }
+      const scopeWebappFrameEl = document.getElementById("scopeWebappFrame");
+      const scopeWebappErrorEl = document.getElementById("scopeWebappError");
+      const scopeWebappDirectLinkEl = document.getElementById("scopeWebappDirectLink");
+      const btnScopeWebappReloadEl = document.getElementById("btnScopeWebappReload");
 
-      function updateFreqDisplay(time, voltage) {
-        const el = document.getElementById("freqDisplay");
-        if (!el) return;
-        const f = computeFrequencyHz(time, voltage);
-        if (f != null && f > 0 && f < 1e9) {
-          el.textContent = f >= 1000 ? (f / 1000).toFixed(2) + " kHz" : f.toFixed(2) + " Hz";
-          el.style.color = "#81c784";
-        } else {
-          el.textContent = "— Hz";
-          el.style.color = "#666";
+      async function initScopeWebapp() {
+        try {
+          const res = await fetch("/scope/webapp/url");
+          const data = await res.json();
+          if (scopeWebappDirectLinkEl && data && data.url) {
+            scopeWebappDirectLinkEl.href = data.url;
+          }
+        } catch (_) {}
+        if (scopeWebappFrameEl) {
+          scopeWebappFrameEl.onload = () => {
+            if (scopeWebappErrorEl) scopeWebappErrorEl.style.display = "none";
+          };
+          scopeWebappFrameEl.onerror = () => {
+            if (scopeWebappErrorEl) {
+              scopeWebappErrorEl.textContent =
+                "Scope WebApp could not be embedded. Use Open directly.";
+              scopeWebappErrorEl.style.display = "block";
+            }
+          };
         }
       }
 
-      let ws = null;
-      document.getElementById("btnStreamToggle").onclick = () => {
-        if (ws) {
-          ws.close();
-          ws = null;
-          isStreaming = false;
-          updateActivityBadge();
-          setStatus("stream stopped");
-          document.getElementById("btnStreamToggle").textContent = "Start Stream";
-          updateFreqDisplay(null, null);
-          if (triggerStatusTimer && !isRecording) {
-            clearInterval(triggerStatusTimer);
-            triggerStatusTimer = null;
-          }
-          return;
-        }
-        ws = new WebSocket(
-          (location.protocol === "https:" ? "wss://" : "ws://") +
-            location.host +
-            "/ws/stream"
-        );
-        ws.onopen = () => {
-          isStreaming = true;
-          updateActivityBadge();
-          setStatus("streaming...");
-          document.getElementById("btnStreamToggle").textContent = "Stop Stream";
-          const channels = getEnabledChannels();
-          if (channels.length) ws.send(JSON.stringify({ channels }));
-          if (!triggerStatusTimer) {
-            triggerStatusTimer = setInterval(refreshTriggerStatus, 1000);
-            refreshTriggerStatus();
-          }
+      if (btnScopeWebappReloadEl && scopeWebappFrameEl) {
+        btnScopeWebappReloadEl.onclick = () => {
+          const base = "/scope/webapp/proxy/index.html";
+          const sep = base.includes("?") ? "&" : "?";
+          scopeWebappFrameEl.src = base + sep + "_ts=" + Date.now();
         };
-        ws.onmessage = (ev) => {
-          const data = JSON.parse(ev.data);
-          let v = {};
-          if (Array.isArray(data.voltage)) {
-            v = { CH1: data.voltage };
-          } else if (data.voltage && typeof data.voltage === "object") {
-            v = data.voltage;
-          }
-          if (Object.keys(v).length === 0 && data.voltage_primary) {
-            v = { CH1: data.voltage_primary };
-          }
-          if (Object.keys(v).length === 0) v = { CH1: [] };
-          let time = data.time;
-          if ((!time || time.length === 0) && v.CH1 && v.CH1.length > 0) {
-            time = v.CH1.map((_, i) => i);
-          }
-          drawWaveformMulti(time, v);
-          const firstCh = getEnabledChannels()[0] || "CH1";
-          updateFreqDisplay(time, v[firstCh] || []);
-        };
-        ws.onclose = () => {
-          ws = null;
-          isStreaming = false;
-          updateActivityBadge();
-          document.getElementById("btnStreamToggle").textContent = "Start Stream";
-          setStatus("stream closed");
-          updateFreqDisplay(null, null);
-          if (triggerStatusTimer && !isRecording) {
-            clearInterval(triggerStatusTimer);
-            triggerStatusTimer = null;
-          }
-        };
-        ws.onerror = () => {
-          setStatus("stream error");
-        };
-      };
+      }
+      initScopeWebapp();
 
       document.getElementById("btnApplyTrigger").onclick = async () => {
         const src = document.getElementById("selTrigSource").value;
@@ -1369,7 +1218,7 @@
           const drawChannels = getHistDrawChannels();
           const histCounts = data.histogram_count || {};
           const batch = getHistBatch();
-          const monitorActive = data.active || isStreaming;
+          const monitorActive = !!data.active;
           let shouldDraw = false;
           if (drawChannels.length > 0) {
             if (monitorActive) {
@@ -1509,10 +1358,8 @@
             data.histogram_count || {}
           );
           if (triggerStatusTimer) {
-            if (!isStreaming) {
-              clearInterval(triggerStatusTimer);
-              triggerStatusTimer = null;
-            }
+            clearInterval(triggerStatusTimer);
+            triggerStatusTimer = null;
           }
           lastHistogramDisplayedHistCount = {};
           const drawChannels = getHistDrawChannels();

@@ -30,3 +30,6 @@ OUTDIR = Path(os.environ.get("OUTPUT_DIR", "outputs"))
 
 # Optional: MJPEG camera stream URL (e.g. Raspberry Pi mjpg-streamer). Unset = camera disabled.
 CAMERA_STREAM_URL = os.environ.get("CAMERA_STREAM_URL") or None
+
+# Optional: built-in oscilloscope web app port (default: 81).
+OSC_WEBAPP_PORT = int(os.environ.get("OSC_WEBAPP_PORT", "81"))

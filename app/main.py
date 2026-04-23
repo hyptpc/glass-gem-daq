@@ -12,8 +12,8 @@ from typing import Any, Dict, List, Optional
 import asyncio
 
 import numpy as np
-from fastapi import Body, FastAPI, Query, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi import Body, FastAPI, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 import httpx
@@ -23,6 +23,7 @@ from app.config import (
     DATA_WINDOW_MODE,
     DEFAULT_CHANNEL,
     OSC_IP,
+    OSC_WEBAPP_PORT,
     OUTDIR,
     START_INDEX,
     STOP_INDEX,
@@ -365,6 +366,85 @@ async def camera_stream():
                     yield chunk
 
     return StreamingResponse(stream_chunks(), media_type=media_type)
+
+
+def _scope_webapp_base_url() -> str:
+    return f"http://{OSC_IP}:{OSC_WEBAPP_PORT}"
+
+
+@app.get("/scope/webapp/url")
+async def scope_webapp_url() -> Dict[str, str]:
+    return {"url": f"{_scope_webapp_base_url()}/index.html"}
+
+
+@app.api_route("/scope/webapp/proxy/{full_path:path}", methods=["GET", "HEAD"])
+async def scope_webapp_proxy(full_path: str, request: Request) -> Response:
+    path = full_path.lstrip("/") or "index.html"
+    upstream = f"{_scope_webapp_base_url()}/{path}"
+    if request.url.query:
+        upstream = f"{upstream}?{request.url.query}"
+
+    headers: Dict[str, str] = {
+        "host": f"{OSC_IP}:{OSC_WEBAPP_PORT}",
+    }
+    if request.headers.get("user-agent"):
+        headers["user-agent"] = request.headers["user-agent"]
+    if request.headers.get("accept"):
+        headers["accept"] = request.headers["accept"]
+    if request.headers.get("cookie"):
+        headers["cookie"] = request.headers["cookie"]
+    if request.headers.get("referer"):
+        headers["referer"] = request.headers["referer"]
+    if request.headers.get("origin"):
+        headers["origin"] = request.headers["origin"]
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=10.0,
+            follow_redirects=True,
+            trust_env=False,
+        ) as client:
+            upstream_resp = await client.request(
+                request.method,
+                upstream,
+                headers=headers,
+            )
+    except Exception as exc:
+        return JSONResponse(
+            status_code=502,
+            content={"detail": f"scope webapp proxy error: {exc}"},
+        )
+
+    passthrough_headers: Dict[str, str] = {}
+    ct = upstream_resp.headers.get("content-type")
+    if ct:
+        passthrough_headers["content-type"] = ct
+    cc = upstream_resp.headers.get("cache-control")
+    if cc:
+        passthrough_headers["cache-control"] = cc
+    set_cookie = upstream_resp.headers.get("set-cookie")
+    if set_cookie:
+        passthrough_headers["set-cookie"] = set_cookie
+
+    body = upstream_resp.content
+    if ct and "text/html" in ct.lower():
+        try:
+            html = upstream_resp.text
+            html = re.sub(
+                r'(?P<a>(?:src|href|action)=["\'])/(?!/)',
+                r"\g<a>/scope/webapp/proxy/",
+                html,
+            )
+            html = re.sub(r"url\(/(?!/)", "url(/scope/webapp/proxy/", html)
+            body = html.encode(upstream_resp.encoding or "utf-8", errors="ignore")
+        except Exception:
+            body = upstream_resp.content
+    # Do not forward frame-restricting headers from upstream.
+    return Response(
+        content=body,
+        status_code=upstream_resp.status_code,
+        headers=passthrough_headers,
+    )
 
 
 @app.get("/trigger")
